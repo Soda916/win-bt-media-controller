@@ -20,10 +20,11 @@ namespace MediaController
 
     public class BluetoothDeviceManager
     {
-        // Apple Media Service (AMS)
-        public static readonly Guid AmsServiceUuid = new("89D3502B-0F36-433A-82F9-C1322C2F8F00");
-        public static readonly Guid RemoteCommandCharUuid = new("9B3C81D8-57B1-4A8A-B8DF-FB571277F1C9");
-        public static readonly Guid EntityUpdateCharUuid = new("2F7DD41B-30AB-415B-9F12-9A21ECFA6A21");
+        // 官方 Apple Media Service (AMS) 128-bit UUIDs
+        public static readonly Guid AmsServiceUuid = new("89D3502B-0F36-433A-8EF4-C502AD55F8DC");
+        public static readonly Guid RemoteCommandCharUuid = new("9B3C81D8-57B1-4A8A-B8DF-0E56F7CA51C2");
+        public static readonly Guid EntityUpdateCharUuid = new("2F7CABCE-808D-411F-9A0C-BB92BA96C102");
+        public static readonly Guid EntityAttributeCharUuid = new("C6B2F38C-23AB-46D8-A6AB-A3A870BBD5D7");
 
         private BluetoothLEDevice? _connectedBleDevice;
         private GattCharacteristic? _remoteCommandChar;
@@ -55,7 +56,7 @@ namespace MediaController
                     Logger.Log($"  - [BLE] 名稱: '{d.Name}', ID: {d.Id}");
                 }
 
-                // 2. 優先連線已配對的 BLE 裝置 (使用 Cached 模式，秒讀服務清單)
+                // 2. 優先連線已配對的 BLE 裝置 (Cached 快速讀取)
                 foreach (var d in bleDevices)
                 {
                     Logger.Log($"[BLE] 正在嘗試快速連線已配對裝置: '{d.Name}'...");
@@ -68,16 +69,7 @@ namespace MediaController
                     }
                 }
 
-                // 3. 查詢經典藍芽已配對清單以記錄診斷資訊
-                string classicSelector = BluetoothDevice.GetDeviceSelectorFromPairingState(true);
-                var classicDevices = await DeviceInformation.FindAllAsync(classicSelector);
-                Logger.Log($"[ClassicBT] 找到 {classicDevices.Count} 個已配對經典藍芽裝置:");
-                foreach (var d in classicDevices)
-                {
-                    Logger.Log($"  - [Classic] 名稱: '{d.Name}', ID: {d.Id}");
-                }
-
-                OnStatusMessage?.Invoke(this, "請在 iPhone 藍芽設定點擊電腦名稱連線...");
+                OnStatusMessage?.Invoke(this, "未成功鎖定 AMS 特徵碼，請檢查 iPhone 藍芽...");
             }
             catch (Exception ex)
             {
@@ -92,7 +84,6 @@ namespace MediaController
                 var bleDev = await BluetoothLEDevice.FromIdAsync(deviceId);
                 if (bleDev != null)
                 {
-                    // 監聽連線狀態改變
                     bleDev.ConnectionStatusChanged += BleDev_ConnectionStatusChanged;
                     return await SetupAmsGattAsync(bleDev);
                 }
@@ -127,11 +118,10 @@ namespace MediaController
                 _connectedBleDevice = bleDev;
                 Logger.Log($"[GATT] 正在讀取 '{bleDev.Name}' 的本地快取 GATT 服務 (Cached)...");
 
-                // 使用 Cached 模式秒讀，不再空中阻塞 8 秒！
                 var servicesResult = await bleDev.GetGattServicesAsync(BluetoothCacheMode.Cached);
                 if (servicesResult.Status != GattCommunicationStatus.Success || servicesResult.Services.Count == 0)
                 {
-                    Logger.Log($"[GATT] 本地快取無服務 (Status={servicesResult.Status})，嘗試快速空中查詢...");
+                    Logger.Log($"[GATT] 本地快取無服務 (Status={servicesResult.Status})，嘗試空中查詢...");
                     servicesResult = await bleDev.GetGattServicesAsync(BluetoothCacheMode.Uncached);
                 }
 
@@ -147,33 +137,39 @@ namespace MediaController
                     Logger.Log($"  - 服務 UUID: {s.Uuid}");
                 }
 
+                // 比對正確的 AMS 官方 UUID: 89D3502B-0F36-433A-8EF4-C502AD55F8DC
                 var amsService = servicesResult.Services.FirstOrDefault(s => s.Uuid == AmsServiceUuid);
                 if (amsService == null)
                 {
-                    Logger.Log($"[GATT] '{bleDev.Name}' 服務清單中未見 AMS UUID，等候裝置完全握手...");
+                    Logger.Log($"[GATT] '{bleDev.Name}' 未找到 AMS 服務 UUID ({AmsServiceUuid})");
                     return false;
                 }
 
-                Logger.Log("[GATT] 成功鎖定 Apple Media Service (AMS)！獲取特徵碼中...");
+                Logger.Log("[GATT] 🔥 成功鎖定 Apple Media Service (AMS) 服務！正在獲取特徵碼...");
                 var charsResult = await amsService.GetCharacteristicsAsync(BluetoothCacheMode.Cached);
                 if (charsResult.Status != GattCommunicationStatus.Success || charsResult.Characteristics.Count == 0)
                 {
                     charsResult = await amsService.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
                 }
 
-                if (charsResult.Status != GattCommunicationStatus.Success) return false;
+                if (charsResult.Status != GattCommunicationStatus.Success)
+                {
+                    Logger.Log($"[GATT] 獲取特徵碼失敗: {charsResult.Status}");
+                    return false;
+                }
 
                 foreach (var ch in charsResult.Characteristics)
                 {
+                    Logger.Log($"  - 特徵碼 UUID: {ch.Uuid}");
                     if (ch.Uuid == RemoteCommandCharUuid)
                     {
                         _remoteCommandChar = ch;
-                        Logger.Log("[GATT] 成功獲取 RemoteCommand 特徵碼！");
+                        Logger.Log("[GATT] ✅ 成功鎖定 RemoteCommand (控制指令)！");
                     }
                     else if (ch.Uuid == EntityUpdateCharUuid)
                     {
                         _entityUpdateChar = ch;
-                        Logger.Log("[GATT] 成功獲取 EntityUpdate 特徵碼！");
+                        Logger.Log("[GATT] ✅ 成功鎖定 EntityUpdate (曲目資料)！");
                     }
                 }
 
@@ -187,15 +183,15 @@ namespace MediaController
                     _entityUpdateChar.ValueChanged -= EntityUpdateChar_ValueChanged;
                     _entityUpdateChar.ValueChanged += EntityUpdateChar_ValueChanged;
 
-                    // 訂閱 Track 資訊 (Artist, Album, Title)
+                    // 訂閱 Track 屬性 (0: Artist, 1: Album, 2: Title)
                     byte[] trackSub = new byte[] { 2, 0, 1, 2 };
                     await _entityUpdateChar.WriteValueAsync(trackSub.AsBuffer(), GattWriteOption.WriteWithResponse);
 
-                    // 訂閱 Player 狀態 (PlaybackInfo)
+                    // 訂閱 Player 狀態 (1: PlaybackInfo)
                     byte[] playerSub = new byte[] { 0, 1 };
                     await _entityUpdateChar.WriteValueAsync(playerSub.AsBuffer(), GattWriteOption.WriteWithResponse);
 
-                    Logger.Log("[GATT] AMS 屬性訂閱發送完成！已準備接收歌名");
+                    Logger.Log("[GATT] 🎉 AMS 屬性訂閱已發送！開始接收 iPhone 歌名！");
                     OnStatusMessage?.Invoke(this, $"AMS 已連線: {bleDev.Name}");
                     return true;
                 }
