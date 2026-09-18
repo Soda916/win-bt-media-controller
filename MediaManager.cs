@@ -22,7 +22,6 @@ namespace MediaController
         // Win32 虛擬多媒體按鍵 (備援發送)
         private const byte VK_MEDIA_NEXT_TRACK = 0xB0;
         private const byte VK_MEDIA_PREV_TRACK = 0xB1;
-        private const byte VK_MEDIA_STOP = 0xB2;
         private const byte VK_MEDIA_PLAY_PAUSE = 0xB3;
         private const int KEYEVENTF_EXTENDEDKEY = 0x0001;
         private const int KEYEVENTF_KEYUP = 0x0002;
@@ -137,6 +136,7 @@ namespace MediaController
                 string title = string.IsNullOrWhiteSpace(props?.Title) ? "未知曲目" : props.Title;
                 string artist = string.IsNullOrWhiteSpace(props?.Artist) ? "未知歌手" : props.Artist;
                 string album = props?.AlbumTitle ?? "";
+                string appId = session.SourceAppUserModelId ?? "";
 
                 // 背景搜尋 600x600 高畫質封面
                 var artwork = await _artworkService.FetchArtworkAsync(title, artist);
@@ -148,11 +148,11 @@ namespace MediaController
                     Album = album,
                     Thumbnail = artwork,
                     IsPlaying = isPlaying,
-                    SourceApp = session.SourceAppId ?? ""
+                    SourceApp = appId
                 });
 
                 PlaybackStateUpdated?.Invoke(this, isPlaying);
-                StatusUpdated?.Invoke(this, $"正在監聽: {session.SourceAppId}");
+                StatusUpdated?.Invoke(this, $"正在監聽: {appId}");
             }
             catch (Exception ex)
             {
@@ -168,7 +168,6 @@ namespace MediaController
                 handled = await _activeSession.TrySkipNextAsync();
             }
 
-            // 如果 Session 控制未被處理，發送系統硬體媒體鍵 (保證能切歌)
             if (!handled)
             {
                 SendMediaKey(VK_MEDIA_NEXT_TRACK);
