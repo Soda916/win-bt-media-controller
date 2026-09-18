@@ -35,8 +35,17 @@ namespace MediaController
             // 監聽媒體更新
             _mediaManager.MediaInfoUpdated += MediaManager_MediaInfoUpdated;
             _mediaManager.PlaybackStateUpdated += MediaManager_PlaybackStateUpdated;
+            _mediaManager.StatusUpdated += MediaManager_StatusUpdated;
 
             await _mediaManager.InitializeAsync();
+        }
+
+        private void MediaManager_StatusUpdated(object? sender, string status)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                TxtArtist.Text = status;
+            });
         }
 
         private void MediaManager_MediaInfoUpdated(object? sender, MediaInfoEventArgs e)
