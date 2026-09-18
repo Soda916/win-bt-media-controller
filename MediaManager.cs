@@ -3,6 +3,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Windows.Media.Control;
 
 namespace MediaController
@@ -32,6 +33,7 @@ namespace MediaController
         private readonly ArtworkService _artworkService = new();
         private GlobalSystemMediaTransportControlsSessionManager? _manager;
         private GlobalSystemMediaTransportControlsSession? _activeSession;
+        private DispatcherTimer? _pollTimer;
 
         public event EventHandler<MediaInfoEventArgs>? MediaInfoUpdated;
         public event EventHandler<bool>? PlaybackStateUpdated;
@@ -39,57 +41,98 @@ namespace MediaController
 
         public async Task InitializeAsync()
         {
+            Logger.Log("[Init] 正在請求 GSMTC SessionManager...");
             try
             {
-                StatusUpdated?.Invoke(this, "正在初始化 Windows 媒體會話監聽...");
                 _manager = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
 
                 if (_manager != null)
                 {
-                    _manager.CurrentSessionChanged += (s, e) => RefreshActiveSession();
-                    _manager.SessionsChanged += (s, e) => RefreshActiveSession();
+                    Logger.Log("[Init] GSMTC SessionManager 請求成功！");
+                    _manager.CurrentSessionChanged += (s, e) =>
+                    {
+                        Logger.Log("[Event] CurrentSessionChanged 觸發");
+                        RefreshActiveSession();
+                    };
+                    _manager.SessionsChanged += (s, e) =>
+                    {
+                        Logger.Log("[Event] SessionsChanged 觸發");
+                        RefreshActiveSession();
+                    };
+
+                    // 建立 1.5 秒定時巡檢器，防止部分藍芽驅動漏發事件
+                    _pollTimer = new DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromMilliseconds(1500)
+                    };
+                    _pollTimer.Tick += (s, e) => RefreshActiveSession();
+                    _pollTimer.Start();
+
                     RefreshActiveSession();
                 }
                 else
                 {
+                    Logger.Log("[Error] GSMTC SessionManager 為 null，可能是系統不支援或權限受阻");
                     StatusUpdated?.Invoke(this, "無法存取 Windows 媒體控制服務");
                 }
             }
             catch (Exception ex)
             {
+                Logger.Log($"[Exception] InitializeAsync 異常: {ex}");
                 StatusUpdated?.Invoke(this, $"初始化失敗: {ex.Message}");
             }
         }
 
-        public void RefreshActiveSession()
+        public async void RefreshActiveSession()
         {
             if (_manager == null) return;
 
             try
             {
                 var sessions = _manager.GetSessions();
-                StatusUpdated?.Invoke(this, $"偵測到 {sessions.Count} 個媒體會話");
+                Logger.Log($"[Scan] 找到 {sessions.Count} 個媒體會話");
 
-                // 優先挑選正在播放的會話，或最後一個活動會話
-                var session = sessions.FirstOrDefault(s =>
+                GlobalSystemMediaTransportControlsSession? targetSession = null;
+
+                for (int i = 0; i < sessions.Count; i++)
                 {
+                    var s = sessions[i];
                     var info = s.GetPlaybackInfo();
-                    return info != null && info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
-                }) ?? _manager.GetCurrentSession() ?? sessions.LastOrDefault();
+                    string appId = s.SourceAppUserModelId ?? "UnknownApp";
+                    string status = info?.PlaybackStatus.ToString() ?? "Unknown";
 
-                if (_activeSession != null)
-                {
-                    _activeSession.MediaPropertiesChanged -= Session_MediaPropertiesChanged;
-                    _activeSession.PlaybackInfoChanged -= Session_PlaybackInfoChanged;
+                    Logger.Log($"  - Session[{i}]: App={appId}, Status={status}");
+
+                    if (info?.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                    {
+                        targetSession = s;
+                    }
                 }
 
-                _activeSession = session;
+                // 若無 Playing 會話，依序退回到 CurrentSession 或最後一個會話
+                targetSession ??= _manager.GetCurrentSession() ?? sessions.LastOrDefault();
+
+                if (_activeSession != targetSession)
+                {
+                    if (_activeSession != null)
+                    {
+                        _activeSession.MediaPropertiesChanged -= Session_MediaPropertiesChanged;
+                        _activeSession.PlaybackInfoChanged -= Session_PlaybackInfoChanged;
+                    }
+
+                    _activeSession = targetSession;
+
+                    if (_activeSession != null)
+                    {
+                        Logger.Log($"[Active] 切換目標會話至: {_activeSession.SourceAppUserModelId}");
+                        _activeSession.MediaPropertiesChanged += Session_MediaPropertiesChanged;
+                        _activeSession.PlaybackInfoChanged += Session_PlaybackInfoChanged;
+                    }
+                }
 
                 if (_activeSession != null)
                 {
-                    _activeSession.MediaPropertiesChanged += Session_MediaPropertiesChanged;
-                    _activeSession.PlaybackInfoChanged += Session_PlaybackInfoChanged;
-                    _ = UpdateMediaInfoAsync(_activeSession);
+                    await UpdateMediaInfoAsync(_activeSession);
                 }
                 else
                 {
@@ -106,12 +149,14 @@ namespace MediaController
             }
             catch (Exception ex)
             {
+                Logger.Log($"[Exception] RefreshActiveSession 異常: {ex}");
                 StatusUpdated?.Invoke(this, $"會話刷新失敗: {ex.Message}");
             }
         }
 
         private async void Session_MediaPropertiesChanged(GlobalSystemMediaTransportControlsSession sender, MediaPropertiesChangedEventArgs args)
         {
+            Logger.Log($"[Event] MediaPropertiesChanged: {sender.SourceAppUserModelId}");
             await UpdateMediaInfoAsync(sender);
         }
 
@@ -121,6 +166,7 @@ namespace MediaController
             if (playbackInfo != null)
             {
                 bool isPlaying = playbackInfo.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+                Logger.Log($"[Event] PlaybackInfoChanged: {sender.SourceAppUserModelId} -> IsPlaying={isPlaying}");
                 PlaybackStateUpdated?.Invoke(this, isPlaying);
             }
         }
@@ -138,6 +184,8 @@ namespace MediaController
                 string album = props?.AlbumTitle ?? "";
                 string appId = session.SourceAppUserModelId ?? "";
 
+                Logger.Log($"[Track] 收到曲目: '{title}' - '{artist}' (Album: '{album}') [App: {appId}]");
+
                 // 背景搜尋 600x600 高畫質封面
                 var artwork = await _artworkService.FetchArtworkAsync(title, artist);
 
@@ -152,52 +200,82 @@ namespace MediaController
                 });
 
                 PlaybackStateUpdated?.Invoke(this, isPlaying);
-                StatusUpdated?.Invoke(this, $"正在監聽: {appId}");
+                StatusUpdated?.Invoke(this, $"已鎖定: {appId}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[MediaManager] UpdateMediaInfo Error: {ex.Message}");
+                Logger.Log($"[Exception] UpdateMediaInfoAsync 異常: {ex}");
             }
         }
 
         public async Task NextAsync()
         {
+            Logger.Log("[Action] 發送 Next 指令");
             bool handled = false;
             if (_activeSession != null)
             {
-                handled = await _activeSession.TrySkipNextAsync();
+                try
+                {
+                    handled = await _activeSession.TrySkipNextAsync();
+                    Logger.Log($"[Action] Session.TrySkipNextAsync 結果: {handled}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"[Action] TrySkipNextAsync 異常: {ex.Message}");
+                }
             }
 
             if (!handled)
             {
+                Logger.Log("[Action] 透過 Win32 keybd_event 發送 VK_MEDIA_NEXT_TRACK 備援按鍵");
                 SendMediaKey(VK_MEDIA_NEXT_TRACK);
             }
         }
 
         public async Task PreviousAsync()
         {
+            Logger.Log("[Action] 發送 Previous 指令");
             bool handled = false;
             if (_activeSession != null)
             {
-                handled = await _activeSession.TrySkipPreviousAsync();
+                try
+                {
+                    handled = await _activeSession.TrySkipPreviousAsync();
+                    Logger.Log($"[Action] Session.TrySkipPreviousAsync 結果: {handled}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"[Action] TrySkipPreviousAsync 異常: {ex.Message}");
+                }
             }
 
             if (!handled)
             {
+                Logger.Log("[Action] 透過 Win32 keybd_event 發送 VK_MEDIA_PREV_TRACK 備援按鍵");
                 SendMediaKey(VK_MEDIA_PREV_TRACK);
             }
         }
 
         public async Task TogglePlayPauseAsync()
         {
+            Logger.Log("[Action] 發送 TogglePlayPause 指令");
             bool handled = false;
             if (_activeSession != null)
             {
-                handled = await _activeSession.TryTogglePlayPauseAsync();
+                try
+                {
+                    handled = await _activeSession.TryTogglePlayPauseAsync();
+                    Logger.Log($"[Action] Session.TryTogglePlayPauseAsync 結果: {handled}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"[Action] TryTogglePlayPauseAsync 異常: {ex.Message}");
+                }
             }
 
             if (!handled)
             {
+                Logger.Log("[Action] 透過 Win32 keybd_event 發送 VK_MEDIA_PLAY_PAUSE 備援按鍵");
                 SendMediaKey(VK_MEDIA_PLAY_PAUSE);
             }
         }

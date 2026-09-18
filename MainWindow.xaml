@@ -66,6 +66,15 @@
     </Window.Resources>
 
     <Border Background="#1E1E2E" CornerRadius="12" BorderBrush="#313244" BorderThickness="1" Margin="6">
+        <Border.ContextMenu>
+            <ContextMenu Background="#1E1E2E" Foreground="#CDD6F4" BorderBrush="#313244">
+                <MenuItem Header="📋 複製除錯 Log (Copy Debug Log)" Click="MenuCopyLog_Click" Foreground="#CDD6F4"/>
+                <MenuItem Header="🔄 重新掃描媒體會話" Click="BtnRefresh_Click" Foreground="#CDD6F4"/>
+                <Separator Background="#313244"/>
+                <MenuItem Header="🧹 清除 Log" Click="MenuClearLog_Click" Foreground="#A6ADC8"/>
+            </ContextMenu>
+        </Border.ContextMenu>
+
         <Border.Effect>
             <DropShadowEffect BlurRadius="12" Direction="270" ShadowDepth="3" Opacity="0.45" Color="#000000"/>
         </Border.Effect>
@@ -87,7 +96,7 @@
             <!-- 歌曲與歌手資訊 -->
             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,6,0">
                 <TextBlock x:Name="TxtTitle" Text="BT Media Controller" Foreground="#CDD6F4" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                <TextBlock x:Name="TxtArtist" Text="等待 iPhone 播放..." Foreground="#A6ADC8" FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="TxtArtist" Text="等待 iPhone 播放... (右鍵可複製 Log)" Foreground="#A6ADC8" FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
             </StackPanel>
 
             <!-- 控制按鈕區 -->

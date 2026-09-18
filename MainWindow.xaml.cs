@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 
@@ -26,6 +27,8 @@ namespace MediaController
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            Logger.Log("[UI] 視窗載入完成，註冊快捷鍵與事件...");
+
             // 初始化快捷鍵 (Ctrl+Alt+Left/Right/Space)
             _hotkeyManager.Initialize(this);
             _hotkeyManager.OnPreviousPressed += async () => await _mediaManager.PreviousAsync();
@@ -96,7 +99,29 @@ namespace MediaController
 
         private void BtnRefresh_Click(object sender, RoutedEventArgs e)
         {
+            Logger.Log("[UI] 使用者手動點擊重新整理按鈕");
             _mediaManager.RefreshActiveSession();
+        }
+
+        private void MenuCopyLog_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                string log = Logger.GetLogText();
+                Clipboard.SetText(log);
+                TxtArtist.Text = "✅ Log 已複製到剪貼簿！";
+                Logger.Log("[UI] 使用者複製了 Log 到剪貼簿");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"複製失敗: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void MenuClearLog_Click(object sender, RoutedEventArgs e)
+        {
+            Logger.Clear();
+            TxtArtist.Text = "Log 已清空";
         }
 
         private async void BtnPrev_Click(object sender, RoutedEventArgs e)
