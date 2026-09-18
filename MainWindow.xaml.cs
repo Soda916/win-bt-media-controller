@@ -94,6 +94,11 @@ namespace MediaController
             }
         }
 
+        private void BtnRefresh_Click(object sender, RoutedEventArgs e)
+        {
+            _mediaManager.RefreshActiveSession();
+        }
+
         private async void BtnPrev_Click(object sender, RoutedEventArgs e)
         {
             await _mediaManager.PreviousAsync();

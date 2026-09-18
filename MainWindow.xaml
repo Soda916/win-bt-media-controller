@@ -87,13 +87,14 @@
             <!-- 歌曲與歌手資訊 -->
             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,6,0">
                 <TextBlock x:Name="TxtTitle" Text="BT Media Controller" Foreground="#CDD6F4" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                <TextBlock x:Name="TxtArtist" Text="等待 iPhone 連線..." Foreground="#A6ADC8" FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="TxtArtist" Text="等待 iPhone 播放..." Foreground="#A6ADC8" FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
             </StackPanel>
 
             <!-- 控制按鈕區 -->
             <StackPanel Grid.Column="2" Orientation="Vertical" VerticalAlignment="Center">
-                <!-- 右上角小工具按鈕 (置頂/縮小/關閉) -->
+                <!-- 右上角小工具按鈕 (重新整理/置頂/縮小/關閉) -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,4">
+                    <Button x:Name="BtnRefresh" Content="🔄" Style="{StaticResource IconBtnStyle}" Click="BtnRefresh_Click" ToolTip="手動重新偵測"/>
                     <Button x:Name="BtnPin" Content="📌" Style="{StaticResource IconBtnStyle}" Click="BtnPin_Click" ToolTip="切換置頂"/>
                     <Button x:Name="BtnMin" Content="🗕" Style="{StaticResource IconBtnStyle}" Click="BtnMin_Click" ToolTip="縮小"/>
                     <Button x:Name="BtnClose" Content="✕" Style="{StaticResource IconBtnStyle}" Click="BtnClose_Click" ToolTip="關閉"/>
