@@ -100,7 +100,7 @@ namespace MediaController
         private void BtnRefresh_Click(object sender, RoutedEventArgs e)
         {
             Logger.Log("[UI] 使用者手動點擊重新整理按鈕");
-            _mediaManager.RefreshActiveSession();
+            _mediaManager.RefreshAllAsync();
         }
 
         private void MenuCopyLog_Click(object sender, RoutedEventArgs e)
