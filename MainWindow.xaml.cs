@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace MediaController
 {
@@ -11,6 +12,9 @@ namespace MediaController
         private readonly HotkeyManager _hotkeyManager = new();
         private bool _isPlaying = false;
         private bool _isPinned = true;
+        private string _currentArtistText = "等待 iPhone 播放...";
+        private DispatcherTimer? _statusResetTimer;
+        private DateTime _lastRefreshTime = DateTime.MinValue;
 
         public MainWindow()
         {
@@ -43,11 +47,24 @@ namespace MediaController
             await _mediaManager.InitializeAsync();
         }
 
+        // 【狀態/錯誤訊息不超過 3 秒，自動還原為歌手】
         private void MediaManager_StatusUpdated(object? sender, string status)
         {
             Dispatcher.Invoke(() =>
             {
                 TxtArtist.Text = status;
+
+                _statusResetTimer?.Stop();
+                _statusResetTimer = new DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(3)
+                };
+                _statusResetTimer.Tick += (s, e) =>
+                {
+                    _statusResetTimer.Stop();
+                    TxtArtist.Text = _currentArtistText;
+                };
+                _statusResetTimer.Start();
             });
         }
 
@@ -56,7 +73,13 @@ namespace MediaController
             Dispatcher.Invoke(() =>
             {
                 TxtTitle.Text = e.Title;
-                TxtArtist.Text = string.IsNullOrEmpty(e.Album) ? e.Artist : $"{e.Artist} • {e.Album}";
+                _currentArtistText = string.IsNullOrEmpty(e.Album) ? e.Artist : $"{e.Artist} • {e.Album}";
+
+                // 若目前沒有狀態計時器在倒數，立即顯示歌手
+                if (_statusResetTimer == null || !_statusResetTimer.IsEnabled)
+                {
+                    TxtArtist.Text = _currentArtistText;
+                }
 
                 if (e.Thumbnail != null)
                 {
@@ -99,6 +122,13 @@ namespace MediaController
 
         private void BtnRefresh_Click(object sender, RoutedEventArgs e)
         {
+            // 防連續手抖點擊 (Debounce 1.5 秒)
+            if ((DateTime.Now - _lastRefreshTime).TotalMilliseconds < 1500)
+            {
+                return;
+            }
+            _lastRefreshTime = DateTime.Now;
+
             Logger.Log("[UI] 使用者手動點擊重新整理按鈕");
             _mediaManager.RefreshAllAsync();
         }
@@ -109,7 +139,7 @@ namespace MediaController
             {
                 string log = Logger.GetLogText();
                 Clipboard.SetText(log);
-                TxtArtist.Text = "✅ Log 已複製到剪貼簿！";
+                MediaManager_StatusUpdated(this, "✅ Log 已複製到剪貼簿！");
                 Logger.Log("[UI] 使用者複製了 Log 到剪貼簿");
             }
             catch (Exception ex)
@@ -121,7 +151,7 @@ namespace MediaController
         private void MenuClearLog_Click(object sender, RoutedEventArgs e)
         {
             Logger.Clear();
-            TxtArtist.Text = "Log 已清空";
+            MediaManager_StatusUpdated(this, "Log 已清空");
         }
 
         private async void BtnPrev_Click(object sender, RoutedEventArgs e)
@@ -160,6 +190,7 @@ namespace MediaController
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            _statusResetTimer?.Stop();
             _hotkeyManager.Dispose();
         }
     }

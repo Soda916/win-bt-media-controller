@@ -20,7 +20,7 @@ namespace MediaController
 
     public class BluetoothDeviceManager
     {
-        // 官方 Apple Media Service (AMS) 128-bit UUIDs
+        // Apple Media Service (AMS) 官方規範 UUID
         public static readonly Guid AmsServiceUuid = new("89D3502B-0F36-433A-8EF4-C502AD55F8DC");
         public static readonly Guid RemoteCommandCharUuid = new("9B3C81D8-57B1-4A8A-B8DF-0E56F7CA51C2");
         public static readonly Guid EntityUpdateCharUuid = new("2F7CABCE-808D-411F-9A0C-BB92BA96C102");
@@ -34,6 +34,7 @@ namespace MediaController
         private string _artist = "";
         private string _album = "";
         private bool _isPlaying = false;
+        private bool _isConnecting = false;
 
         public event EventHandler<BleMediaInfoEventArgs>? OnMediaUpdated;
         public event EventHandler<string>? OnStatusMessage;
@@ -43,11 +44,28 @@ namespace MediaController
 
         public async Task ScanAndConnectPairedDevicesAsync()
         {
-            Logger.Log("[DeviceManager] 開始掃描系統中所有已配對的藍芽裝置...");
+            if (_isConnecting) return;
+            _isConnecting = true;
 
             try
             {
-                // 1. 查詢 BLE 已配對清單
+                // 如果已經連線成功，避免重複查詢造成 AccessDenied
+                if (IsAmsConnected && _entityUpdateChar != null)
+                {
+                    Logger.Log("[DeviceManager] AMS 已經處於連線狀態，主動重整曲目屬性...");
+                    try
+                    {
+                        byte[] trackSub = new byte[] { 2, 0, 1, 2 };
+                        await _entityUpdateChar.WriteValueAsync(trackSub.AsBuffer(), GattWriteOption.WriteWithResponse);
+                        byte[] playerSub = new byte[] { 0, 1 };
+                        await _entityUpdateChar.WriteValueAsync(playerSub.AsBuffer(), GattWriteOption.WriteWithResponse);
+                    }
+                    catch { }
+                    return;
+                }
+
+                Logger.Log("[DeviceManager] 開始掃描系統中所有已配對的藍芽裝置...");
+
                 string bleSelector = BluetoothLEDevice.GetDeviceSelectorFromPairingState(true);
                 var bleDevices = await DeviceInformation.FindAllAsync(bleSelector);
                 Logger.Log($"[BLE] 找到 {bleDevices.Count} 個已配對 BLE 裝置:");
@@ -56,7 +74,6 @@ namespace MediaController
                     Logger.Log($"  - [BLE] 名稱: '{d.Name}', ID: {d.Id}");
                 }
 
-                // 2. 優先連線已配對的 BLE 裝置 (Cached 快速讀取)
                 foreach (var d in bleDevices)
                 {
                     Logger.Log($"[BLE] 正在嘗試快速連線已配對裝置: '{d.Name}'...");
@@ -69,11 +86,15 @@ namespace MediaController
                     }
                 }
 
-                OnStatusMessage?.Invoke(this, "未成功鎖定 AMS 特徵碼，請檢查 iPhone 藍芽...");
+                OnStatusMessage?.Invoke(this, "未成功鎖定 AMS 特徵碼，請點擊重新整理...");
             }
             catch (Exception ex)
             {
                 Logger.Log($"[DeviceManager] 掃描異常: {ex}");
+            }
+            finally
+            {
+                _isConnecting = false;
             }
         }
 
@@ -116,12 +137,11 @@ namespace MediaController
             try
             {
                 _connectedBleDevice = bleDev;
-                Logger.Log($"[GATT] 正在讀取 '{bleDev.Name}' 的本地快取 GATT 服務 (Cached)...");
+                Logger.Log($"[GATT] 正在讀取 '{bleDev.Name}' 的 GATT 服務...");
 
                 var servicesResult = await bleDev.GetGattServicesAsync(BluetoothCacheMode.Cached);
                 if (servicesResult.Status != GattCommunicationStatus.Success || servicesResult.Services.Count == 0)
                 {
-                    Logger.Log($"[GATT] 本地快取無服務 (Status={servicesResult.Status})，嘗試空中查詢...");
                     servicesResult = await bleDev.GetGattServicesAsync(BluetoothCacheMode.Uncached);
                 }
 
@@ -132,20 +152,19 @@ namespace MediaController
                 }
 
                 Logger.Log($"[GATT] '{bleDev.Name}' 共有 {servicesResult.Services.Count} 個 GATT 服務");
-                foreach (var s in servicesResult.Services)
-                {
-                    Logger.Log($"  - 服務 UUID: {s.Uuid}");
-                }
 
-                // 比對正確的 AMS 官方 UUID: 89D3502B-0F36-433A-8EF4-C502AD55F8DC
-                var amsService = servicesResult.Services.FirstOrDefault(s => s.Uuid == AmsServiceUuid);
+                // 【動態判定】比對 AMS UUID 或 開頭帶有 89d3502b 的服務
+                var amsService = servicesResult.Services.FirstOrDefault(s =>
+                    s.Uuid == AmsServiceUuid ||
+                    s.Uuid.ToString().ToLower().StartsWith("89d3502b"));
+
                 if (amsService == null)
                 {
-                    Logger.Log($"[GATT] '{bleDev.Name}' 未找到 AMS 服務 UUID ({AmsServiceUuid})");
+                    Logger.Log($"[GATT] '{bleDev.Name}' 未匹配到 AMS 服務 UUID");
                     return false;
                 }
 
-                Logger.Log("[GATT] 🔥 成功鎖定 Apple Media Service (AMS) 服務！正在獲取特徵碼...");
+                Logger.Log($"[GATT] 🔥 動態鎖定 AMS 服務 ({amsService.Uuid})！獲取特徵碼中...");
                 var charsResult = await amsService.GetCharacteristicsAsync(BluetoothCacheMode.Cached);
                 if (charsResult.Status != GattCommunicationStatus.Success || charsResult.Characteristics.Count == 0)
                 {
@@ -160,22 +179,25 @@ namespace MediaController
 
                 foreach (var ch in charsResult.Characteristics)
                 {
+                    string uuidLower = ch.Uuid.ToString().ToLower();
                     Logger.Log($"  - 特徵碼 UUID: {ch.Uuid}");
-                    if (ch.Uuid == RemoteCommandCharUuid)
+
+                    // 【動態判定】比對 RemoteCommand 特徵碼
+                    if (ch.Uuid == RemoteCommandCharUuid || uuidLower.StartsWith("9b3c81d8"))
                     {
                         _remoteCommandChar = ch;
-                        Logger.Log("[GATT] ✅ 成功鎖定 RemoteCommand (控制指令)！");
+                        Logger.Log("[GATT] ✅ 動態鎖定 RemoteCommand (控制指令)！");
                     }
-                    else if (ch.Uuid == EntityUpdateCharUuid)
+                    // 【動態判定】比對 EntityUpdate 特徵碼
+                    else if (ch.Uuid == EntityUpdateCharUuid || uuidLower.StartsWith("2f7cabce") || uuidLower.Contains("2f7c"))
                     {
                         _entityUpdateChar = ch;
-                        Logger.Log("[GATT] ✅ 成功鎖定 EntityUpdate (曲目資料)！");
+                        Logger.Log("[GATT] ✅ 動態鎖定 EntityUpdate (曲目資料)！");
                     }
                 }
 
                 if (_entityUpdateChar != null)
                 {
-                    // 訂閱通知
                     var notifyResult = await _entityUpdateChar.WriteClientCharacteristicConfigurationDescriptorAsync(
                         GattClientCharacteristicConfigurationDescriptorValue.Notify);
                     Logger.Log($"[GATT] 訂閱通知結果: {notifyResult}");
@@ -234,6 +256,7 @@ namespace MediaController
                         if (parts.Length > 0 && int.TryParse(parts[0], out int st))
                         {
                             _isPlaying = (st == 1);
+                            Logger.Log($"[AMS PlaybackState] 播放狀態解析為: {(_isPlaying ? "Playing" : "Paused")}");
                             TriggerMediaUpdated();
                         }
                     }
@@ -258,7 +281,22 @@ namespace MediaController
 
         public async Task<bool> NextTrackAsync() => await SendCommandAsync(3);
         public async Task<bool> PreviousTrackAsync() => await SendCommandAsync(4);
-        public async Task<bool> TogglePlayPauseAsync() => await SendCommandAsync(2);
+
+        // 【普雷拋死徹底修復】
+        // iOS AMS 對指令 2 (Toggle) 常有相容問題，改為明確發送 Play (0) 或 Pause (1)，並輔以 Toggle (2)
+        public async Task<bool> TogglePlayPauseAsync()
+        {
+            byte explicitCmd = _isPlaying ? (byte)1 : (byte)0; // 播中發送 1 (Pause)，停中發送 0 (Play)
+            Logger.Log($"[AMS Toggle] 目前 _isPlaying={_isPlaying}，優先發送命令 {explicitCmd} ({(explicitCmd == 1 ? "Pause" : "Play")})");
+
+            bool ok = await SendCommandAsync(explicitCmd);
+            if (!ok)
+            {
+                Logger.Log("[AMS Toggle] 明確命令失敗，備援發送命令 2 (TogglePlayPause)");
+                ok = await SendCommandAsync(2);
+            }
+            return ok;
+        }
 
         private async Task<bool> SendCommandAsync(byte cmdId)
         {
@@ -267,8 +305,13 @@ namespace MediaController
                 try
                 {
                     byte[] payload = new byte[] { cmdId };
-                    var res = await _remoteCommandChar.WriteValueAsync(payload.AsBuffer(), GattWriteOption.WriteWithoutResponse);
-                    Logger.Log($"[AMS SendCommand] 指令 {cmdId} 發送結果: {res}");
+                    // 優先使用 WriteWithResponse 確保 iOS 確實驗收執行
+                    var writeOption = _remoteCommandChar.CharacteristicProperties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse)
+                        ? GattWriteOption.WriteWithoutResponse
+                        : GattWriteOption.WriteWithResponse;
+
+                    var res = await _remoteCommandChar.WriteValueAsync(payload.AsBuffer(), writeOption);
+                    Logger.Log($"[AMS SendCommand] 指令 {cmdId} 發送 ({writeOption}) 結果: {res}");
                     return res == GattCommunicationStatus.Success;
                 }
                 catch (Exception ex)
