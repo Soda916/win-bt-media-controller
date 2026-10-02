@@ -111,11 +111,9 @@
 
                 <!-- 播放控制按鈕 -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button x:Name="BtnVolumeDown" Content="🔉" Style="{StaticResource MediaBtnStyle}" Click="BtnVolumeDown_Click" ToolTip="降低手機音量 (Ctrl+Alt+Down)"/>
                     <Button x:Name="BtnPrev" Content="⏮" Style="{StaticResource MediaBtnStyle}" Click="BtnPrev_Click" ToolTip="上一首 (Ctrl+Alt+Left)"/>
                     <Button x:Name="BtnPlayPause" Content="▶" Style="{StaticResource MediaBtnStyle}" Click="BtnPlayPause_Click" ToolTip="播放/暫停 (Ctrl+Alt+Space)" Margin="4,0"/>
                     <Button x:Name="BtnNext" Content="⏭" Style="{StaticResource MediaBtnStyle}" Click="BtnNext_Click" ToolTip="下一首 (Ctrl+Alt+Right)"/>
-                    <Button x:Name="BtnVolumeUp" Content="🔊" Style="{StaticResource MediaBtnStyle}" Click="BtnVolumeUp_Click" ToolTip="提高手機音量 (Ctrl+Alt+Up)"/>
                 </StackPanel>
 
                 <!-- AMS 不會回傳目前音量，因此滑桿顯示本次程式執行期間的相對調整位置。 -->
