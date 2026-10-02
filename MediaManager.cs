@@ -15,6 +15,10 @@ namespace MediaController
         public string Album { get; set; } = "";
         public BitmapImage? Thumbnail { get; set; }
         public bool IsPlaying { get; set; }
+        public double? Volume { get; set; }
+        public double? Duration { get; set; }
+        public double? ElapsedTime { get; set; }
+        public double PlaybackRate { get; set; }
         public string SourceApp { get; set; } = "";
     }
 
@@ -35,6 +39,10 @@ namespace MediaController
         private GlobalSystemMediaTransportControlsSessionManager? _manager;
         private GlobalSystemMediaTransportControlsSession? _activeSession;
         private DispatcherTimer? _pollTimer;
+        private string _artworkTrackKey = "";
+        private BitmapImage? _currentBleArtwork;
+        private BleMediaInfoEventArgs? _latestBleMediaInfo;
+        private int _artworkRequestVersion;
 
         public event EventHandler<MediaInfoEventArgs>? MediaInfoUpdated;
         public event EventHandler<bool>? PlaybackStateUpdated;
@@ -44,20 +52,7 @@ namespace MediaController
         {
             // 1. 綁定藍芽裝置管理器事件
             _btManager.OnStatusMessage += (s, msg) => StatusUpdated?.Invoke(this, msg);
-            _btManager.OnMediaUpdated += async (s, e) =>
-            {
-                var artwork = await _artworkService.FetchArtworkAsync(e.Title, e.Artist);
-                MediaInfoUpdated?.Invoke(this, new MediaInfoEventArgs
-                {
-                    Title = e.Title,
-                    Artist = e.Artist,
-                    Album = e.Album,
-                    Thumbnail = artwork,
-                    IsPlaying = e.IsPlaying,
-                    SourceApp = _btManager.ConnectedDeviceName
-                });
-                PlaybackStateUpdated?.Invoke(this, e.IsPlaying);
-            };
+            _btManager.OnMediaUpdated += BtManager_OnMediaUpdated;
 
             // 啟動已配對裝置掃描與連線 (在背景執行不阻塞 UI)
             _ = _btManager.ScanAndConnectPairedDevicesAsync();
@@ -88,6 +83,53 @@ namespace MediaController
             {
                 Logger.Log($"[Init] GSMTC 異常: {ex.Message}");
             }
+        }
+
+        private async void BtManager_OnMediaUpdated(object? sender, BleMediaInfoEventArgs e)
+        {
+            _latestBleMediaInfo = e;
+            string trackKey = $"{e.Title}\n{e.Artist}";
+            bool trackChanged = !string.Equals(_artworkTrackKey, trackKey, StringComparison.Ordinal);
+
+            if (trackChanged)
+            {
+                _artworkTrackKey = trackKey;
+                _currentBleArtwork = null;
+                _artworkRequestVersion++;
+            }
+
+            // 播放時間與音量先立即送到 UI；不能被網路封面查詢阻塞。
+            PublishBleMediaInfo(e, _currentBleArtwork);
+
+            if (!trackChanged) return;
+
+            int requestVersion = _artworkRequestVersion;
+            var artwork = await _artworkService.FetchArtworkAsync(e.Title, e.Artist);
+            if (requestVersion != _artworkRequestVersion) return;
+
+            _currentBleArtwork = artwork;
+            if (_latestBleMediaInfo != null)
+            {
+                PublishBleMediaInfo(_latestBleMediaInfo, artwork);
+            }
+        }
+
+        private void PublishBleMediaInfo(BleMediaInfoEventArgs e, BitmapImage? artwork)
+        {
+            MediaInfoUpdated?.Invoke(this, new MediaInfoEventArgs
+            {
+                Title = e.Title,
+                Artist = e.Artist,
+                Album = e.Album,
+                Thumbnail = artwork,
+                IsPlaying = e.IsPlaying,
+                Volume = e.Volume,
+                Duration = e.Duration,
+                ElapsedTime = e.ElapsedTime,
+                PlaybackRate = e.PlaybackRate,
+                SourceApp = _btManager.ConnectedDeviceName
+            });
+            PlaybackStateUpdated?.Invoke(this, e.IsPlaying);
         }
 
         public async void RefreshAllAsync()
@@ -249,6 +291,45 @@ namespace MediaController
             }
 
             SendMediaKey(VK_MEDIA_PLAY_PAUSE);
+        }
+
+        public Task<bool> VolumeUpAsync() => AdjustPhoneVolumeAsync(1);
+
+        public Task<bool> VolumeDownAsync() => AdjustPhoneVolumeAsync(-1);
+
+        public async Task<bool> AdjustPhoneVolumeAsync(int steps)
+        {
+            if (steps == 0) return true;
+
+            // 一次最多送 20 格，避免異常 UI 輸入造成大量 BLE 寫入。
+            steps = Math.Clamp(steps, -20, 20);
+            bool increase = steps > 0;
+            int commandCount = Math.Abs(steps);
+            Logger.Log($"[Action] 發送手機音量{(increase ? "增加" : "降低")}指令，共 {commandCount} 格");
+
+            if (!_btManager.IsAmsConnected)
+            {
+                Logger.Log("[Action] 手機音量調整失敗：AMS 尚未連線");
+                StatusUpdated?.Invoke(this, "請先連線支援 AMS 的 iPhone");
+                return false;
+            }
+
+            for (int i = 0; i < commandCount; i++)
+            {
+                bool sent = increase
+                    ? await _btManager.VolumeUpAsync()
+                    : await _btManager.VolumeDownAsync();
+
+                if (!sent)
+                {
+                    Logger.Log($"[Action] 手機音量調整在第 {i + 1} 格失敗");
+                    StatusUpdated?.Invoke(this, "手機音量調整失敗，請重新連線");
+                    return false;
+                }
+            }
+
+            StatusUpdated?.Invoke(this, increase ? "🔊 手機音量增加" : "🔉 手機音量降低");
+            return true;
         }
 
         private static void SendMediaKey(byte key)
