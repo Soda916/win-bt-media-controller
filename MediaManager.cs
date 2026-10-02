@@ -39,6 +39,10 @@ namespace MediaController
         private GlobalSystemMediaTransportControlsSessionManager? _manager;
         private GlobalSystemMediaTransportControlsSession? _activeSession;
         private DispatcherTimer? _pollTimer;
+        private string _artworkTrackKey = "";
+        private BitmapImage? _currentBleArtwork;
+        private BleMediaInfoEventArgs? _latestBleMediaInfo;
+        private int _artworkRequestVersion;
 
         public event EventHandler<MediaInfoEventArgs>? MediaInfoUpdated;
         public event EventHandler<bool>? PlaybackStateUpdated;
@@ -48,24 +52,7 @@ namespace MediaController
         {
             // 1. 綁定藍芽裝置管理器事件
             _btManager.OnStatusMessage += (s, msg) => StatusUpdated?.Invoke(this, msg);
-            _btManager.OnMediaUpdated += async (s, e) =>
-            {
-                var artwork = await _artworkService.FetchArtworkAsync(e.Title, e.Artist);
-                MediaInfoUpdated?.Invoke(this, new MediaInfoEventArgs
-                {
-                    Title = e.Title,
-                    Artist = e.Artist,
-                    Album = e.Album,
-                    Thumbnail = artwork,
-                    IsPlaying = e.IsPlaying,
-                    Volume = e.Volume,
-                    Duration = e.Duration,
-                    ElapsedTime = e.ElapsedTime,
-                    PlaybackRate = e.PlaybackRate,
-                    SourceApp = _btManager.ConnectedDeviceName
-                });
-                PlaybackStateUpdated?.Invoke(this, e.IsPlaying);
-            };
+            _btManager.OnMediaUpdated += BtManager_OnMediaUpdated;
 
             // 啟動已配對裝置掃描與連線 (在背景執行不阻塞 UI)
             _ = _btManager.ScanAndConnectPairedDevicesAsync();
@@ -96,6 +83,53 @@ namespace MediaController
             {
                 Logger.Log($"[Init] GSMTC 異常: {ex.Message}");
             }
+        }
+
+        private async void BtManager_OnMediaUpdated(object? sender, BleMediaInfoEventArgs e)
+        {
+            _latestBleMediaInfo = e;
+            string trackKey = $"{e.Title}\n{e.Artist}";
+            bool trackChanged = !string.Equals(_artworkTrackKey, trackKey, StringComparison.Ordinal);
+
+            if (trackChanged)
+            {
+                _artworkTrackKey = trackKey;
+                _currentBleArtwork = null;
+                _artworkRequestVersion++;
+            }
+
+            // 播放時間與音量先立即送到 UI；不能被網路封面查詢阻塞。
+            PublishBleMediaInfo(e, _currentBleArtwork);
+
+            if (!trackChanged) return;
+
+            int requestVersion = _artworkRequestVersion;
+            var artwork = await _artworkService.FetchArtworkAsync(e.Title, e.Artist);
+            if (requestVersion != _artworkRequestVersion) return;
+
+            _currentBleArtwork = artwork;
+            if (_latestBleMediaInfo != null)
+            {
+                PublishBleMediaInfo(_latestBleMediaInfo, artwork);
+            }
+        }
+
+        private void PublishBleMediaInfo(BleMediaInfoEventArgs e, BitmapImage? artwork)
+        {
+            MediaInfoUpdated?.Invoke(this, new MediaInfoEventArgs
+            {
+                Title = e.Title,
+                Artist = e.Artist,
+                Album = e.Album,
+                Thumbnail = artwork,
+                IsPlaying = e.IsPlaying,
+                Volume = e.Volume,
+                Duration = e.Duration,
+                ElapsedTime = e.ElapsedTime,
+                PlaybackRate = e.PlaybackRate,
+                SourceApp = _btManager.ConnectedDeviceName
+            });
+            PlaybackStateUpdated?.Invoke(this, e.IsPlaying);
         }
 
         public async void RefreshAllAsync()

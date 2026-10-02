@@ -79,6 +79,10 @@
             <DropShadowEffect BlurRadius="12" Direction="270" ShadowDepth="3" Opacity="0.45" Color="#000000"/>
         </Border.Effect>
         <Grid Margin="10,8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="64"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="64"/>
                 <ColumnDefinition Width="*"/>
@@ -86,7 +90,7 @@
             </Grid.ColumnDefinitions>
 
             <!-- 專輯封面 -->
-            <Border Grid.Column="0" Width="60" Height="60" CornerRadius="8" Background="#181825" ClipToBounds="True">
+            <Border Grid.Row="0" Grid.Column="0" Width="60" Height="60" CornerRadius="8" Background="#181825" ClipToBounds="True">
                 <Grid>
                     <TextBlock x:Name="CoverPlaceholder" Text="🎵" FontSize="26" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#585B70"/>
                     <Image x:Name="ImgCover" Stretch="UniformToFill"/>
@@ -94,13 +98,13 @@
             </Border>
 
             <!-- 歌曲與歌手資訊 -->
-            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,6,0">
+            <StackPanel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center" Margin="10,0,6,0">
                 <TextBlock x:Name="TxtTitle" Text="BT Media Controller" Foreground="#CDD6F4" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                 <TextBlock x:Name="TxtArtist" Text="等待 iPhone 播放... (右鍵可複製 Log)" Foreground="#A6ADC8" FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
             </StackPanel>
 
             <!-- 控制按鈕區 -->
-            <StackPanel Grid.Column="2" Orientation="Vertical" VerticalAlignment="Center">
+            <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Vertical" VerticalAlignment="Center">
                 <!-- 右上角小工具按鈕 (重新整理/置頂/縮小/關閉) -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,4">
                     <Button x:Name="BtnRefresh" Content="🔄" Style="{StaticResource IconBtnStyle}" Click="BtnRefresh_Click" ToolTip="手動重新偵測"/>
@@ -116,23 +120,32 @@
                     <Button x:Name="BtnNext" Content="⏭" Style="{StaticResource MediaBtnStyle}" Click="BtnNext_Click" ToolTip="下一首 (Ctrl+Alt+Right)"/>
                 </StackPanel>
 
-                <!-- AMS Player Volume 屬性會同步手機目前音量。 -->
-                <DockPanel Margin="0,3,0,0" LastChildFill="False" HorizontalAlignment="Right">
-                    <StackPanel DockPanel.Dock="Left" Width="125" Margin="0,0,8,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="TxtPlaybackTime" Text="--:-- / --:--" Foreground="#A6ADC8" FontSize="9"
-                                   HorizontalAlignment="Right" Margin="0,0,0,1"/>
-                        <ProgressBar x:Name="PlaybackProgress" Height="4" Minimum="0" Maximum="1" Value="0"
-                                     Foreground="#89B4FA" Background="#313244"
-                                     ToolTip="手機目前的歌曲播放進度"/>
-                    </StackPanel>
+            </StackPanel>
+
+            <!-- 底部進度列：左側為歌曲進度，右側為手機音量。 -->
+            <DockPanel Grid.Row="1" Grid.ColumnSpan="3" Margin="0,4,0,0" LastChildFill="True">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
                     <Button x:Name="BtnVolumeDown" DockPanel.Dock="Left" Content="🔉" Style="{StaticResource IconBtnStyle}" Click="BtnVolumeDown_Click" ToolTip="降低手機音量 (Ctrl+Alt+Down)"/>
-                    <Slider x:Name="VolumeSlider" DockPanel.Dock="Left" Width="105" Minimum="0" Maximum="100" Value="50" IsEnabled="False"
+                    <Slider x:Name="VolumeSlider" Width="105" Minimum="0" Maximum="100" Value="50" IsEnabled="False"
                             TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="10"
                             ValueChanged="VolumeSlider_ValueChanged"
                             ToolTip="拖曳調整手機音量；連線後會同步目前音量"/>
-                    <Button x:Name="BtnVolumeUp" DockPanel.Dock="Left" Content="🔊" Style="{StaticResource IconBtnStyle}" Click="BtnVolumeUp_Click" ToolTip="提高手機音量 (Ctrl+Alt+Up)"/>
-                </DockPanel>
-            </StackPanel>
+                    <Button x:Name="BtnVolumeUp" Content="🔊" Style="{StaticResource IconBtnStyle}" Click="BtnVolumeUp_Click" ToolTip="提高手機音量 (Ctrl+Alt+Up)"/>
+                </StackPanel>
+
+                <Grid VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="TxtElapsedTime" Grid.Column="0" Text="0:00" Foreground="#A6ADC8" FontSize="9" VerticalAlignment="Center"/>
+                    <ProgressBar x:Name="PlaybackProgress" Grid.Column="1" Height="5" Margin="5,0" Minimum="0" Maximum="1" Value="0"
+                                 Foreground="#89B4FA" Background="#313244" VerticalAlignment="Center"
+                                 ToolTip="手機目前的歌曲播放進度（僅供顯示）"/>
+                    <TextBlock x:Name="TxtDuration" Grid.Column="2" Text="--:--" Foreground="#A6ADC8" FontSize="9" VerticalAlignment="Center"/>
+                </Grid>
+            </DockPanel>
         </Grid>
     </Border>
 </Window>

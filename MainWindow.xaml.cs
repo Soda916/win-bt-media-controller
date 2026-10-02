@@ -329,7 +329,8 @@ namespace MediaController
             string durationText = _playbackDurationSeconds > 0
                 ? FormatPlaybackTime(_playbackDurationSeconds)
                 : "--:--";
-            TxtPlaybackTime.Text = $"{FormatPlaybackTime(elapsed)} / {durationText}";
+            TxtElapsedTime.Text = FormatPlaybackTime(elapsed);
+            TxtDuration.Text = durationText;
         }
 
         private static string FormatPlaybackTime(double totalSeconds)
