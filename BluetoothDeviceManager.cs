@@ -307,6 +307,8 @@ namespace MediaController
 
         public async Task<bool> NextTrackAsync() => await SendCommandAsync(3);
         public async Task<bool> PreviousTrackAsync() => await SendCommandAsync(4);
+        public async Task<bool> VolumeUpAsync() => await SendCommandAsync(5);
+        public async Task<bool> VolumeDownAsync() => await SendCommandAsync(6);
 
         // 【普雷拋死徹底修復】
         // 優先送 Toggle (2)，若無效補發明確的 Play (0) / Pause (1)

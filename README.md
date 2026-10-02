@@ -18,7 +18,12 @@
      * `Ctrl + Alt + →`：下一首 (Next)
      * `Ctrl + Alt + ←`：上一首 (Previous)
      * `Ctrl + Alt + Space`：播放 / 暫停 (Play / Pause)
-4. **極簡懸浮窗 (Floating Widget)**：
+     * `Ctrl + Alt + ↑`：提高手機音量
+     * `Ctrl + Alt + ↓`：降低手機音量
+4. **手機音量控制**：
+   * 可直接從懸浮窗的 `🔉` / `🔊` 按鈕調整 iPhone 媒體音量。
+   * 音量指令透過 Apple Media Service (AMS) 傳送，不會誤調整 Windows 系統音量。
+5. **極簡懸浮窗 (Floating Widget)**：
    * 支援任意拖曳移動。
    * 可釘選置頂 (`📌`) 或縮小至工作列。
 

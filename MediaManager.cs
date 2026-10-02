@@ -251,6 +251,34 @@ namespace MediaController
             SendMediaKey(VK_MEDIA_PLAY_PAUSE);
         }
 
+        public async Task VolumeUpAsync()
+        {
+            Logger.Log("[Action] 發送手機音量增加指令");
+
+            if (_btManager.IsAmsConnected && await _btManager.VolumeUpAsync())
+            {
+                StatusUpdated?.Invoke(this, "🔊 手機音量增加");
+                return;
+            }
+
+            Logger.Log("[Action] 手機音量增加失敗：AMS 尚未連線或裝置不支援");
+            StatusUpdated?.Invoke(this, "請先連線支援 AMS 的 iPhone");
+        }
+
+        public async Task VolumeDownAsync()
+        {
+            Logger.Log("[Action] 發送手機音量降低指令");
+
+            if (_btManager.IsAmsConnected && await _btManager.VolumeDownAsync())
+            {
+                StatusUpdated?.Invoke(this, "🔉 手機音量降低");
+                return;
+            }
+
+            Logger.Log("[Action] 手機音量降低失敗：AMS 尚未連線或裝置不支援");
+            StatusUpdated?.Invoke(this, "請先連線支援 AMS 的 iPhone");
+        }
+
         private static void SendMediaKey(byte key)
         {
             keybd_event(key, 0, KEYEVENTF_EXTENDEDKEY, 0);
