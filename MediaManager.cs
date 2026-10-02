@@ -15,6 +15,10 @@ namespace MediaController
         public string Album { get; set; } = "";
         public BitmapImage? Thumbnail { get; set; }
         public bool IsPlaying { get; set; }
+        public double? Volume { get; set; }
+        public double? Duration { get; set; }
+        public double? ElapsedTime { get; set; }
+        public double PlaybackRate { get; set; }
         public string SourceApp { get; set; } = "";
     }
 
@@ -54,6 +58,10 @@ namespace MediaController
                     Album = e.Album,
                     Thumbnail = artwork,
                     IsPlaying = e.IsPlaying,
+                    Volume = e.Volume,
+                    Duration = e.Duration,
+                    ElapsedTime = e.ElapsedTime,
+                    PlaybackRate = e.PlaybackRate,
                     SourceApp = _btManager.ConnectedDeviceName
                 });
                 PlaybackStateUpdated?.Invoke(this, e.IsPlaying);
@@ -249,6 +257,45 @@ namespace MediaController
             }
 
             SendMediaKey(VK_MEDIA_PLAY_PAUSE);
+        }
+
+        public Task<bool> VolumeUpAsync() => AdjustPhoneVolumeAsync(1);
+
+        public Task<bool> VolumeDownAsync() => AdjustPhoneVolumeAsync(-1);
+
+        public async Task<bool> AdjustPhoneVolumeAsync(int steps)
+        {
+            if (steps == 0) return true;
+
+            // 一次最多送 20 格，避免異常 UI 輸入造成大量 BLE 寫入。
+            steps = Math.Clamp(steps, -20, 20);
+            bool increase = steps > 0;
+            int commandCount = Math.Abs(steps);
+            Logger.Log($"[Action] 發送手機音量{(increase ? "增加" : "降低")}指令，共 {commandCount} 格");
+
+            if (!_btManager.IsAmsConnected)
+            {
+                Logger.Log("[Action] 手機音量調整失敗：AMS 尚未連線");
+                StatusUpdated?.Invoke(this, "請先連線支援 AMS 的 iPhone");
+                return false;
+            }
+
+            for (int i = 0; i < commandCount; i++)
+            {
+                bool sent = increase
+                    ? await _btManager.VolumeUpAsync()
+                    : await _btManager.VolumeDownAsync();
+
+                if (!sent)
+                {
+                    Logger.Log($"[Action] 手機音量調整在第 {i + 1} 格失敗");
+                    StatusUpdated?.Invoke(this, "手機音量調整失敗，請重新連線");
+                    return false;
+                }
+            }
+
+            StatusUpdated?.Invoke(this, increase ? "🔊 手機音量增加" : "🔉 手機音量降低");
+            return true;
         }
 
         private static void SendMediaKey(byte key)

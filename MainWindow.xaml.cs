@@ -14,11 +14,31 @@ namespace MediaController
         private bool _isPinned = true;
         private string _currentArtistText = "等待 iPhone 播放...";
         private DispatcherTimer? _statusResetTimer;
+        private readonly DispatcherTimer _volumeSliderTimer;
+        private readonly DispatcherTimer _playbackProgressTimer;
         private DateTime _lastRefreshTime = DateTime.MinValue;
+        private double _lastSentVolumeSliderValue = 50;
+        private bool _isUpdatingVolumeSlider;
+        private double _playbackElapsedSeconds;
+        private double _playbackDurationSeconds;
+        private double _playbackRate;
+        private DateTime _lastPlaybackSyncTime = DateTime.UtcNow;
+        private string _progressTrackTitle = "";
 
         public MainWindow()
         {
             InitializeComponent();
+            _volumeSliderTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(180)
+            };
+            _volumeSliderTimer.Tick += VolumeSliderTimer_Tick;
+            _playbackProgressTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(500)
+            };
+            _playbackProgressTimer.Tick += PlaybackProgressTimer_Tick;
+            _playbackProgressTimer.Start();
             PositionWindowBottomRight();
         }
 
@@ -38,6 +58,20 @@ namespace MediaController
             _hotkeyManager.OnPreviousPressed += async () => await _mediaManager.PreviousAsync();
             _hotkeyManager.OnNextPressed += async () => await _mediaManager.NextAsync();
             _hotkeyManager.OnPlayPausePressed += async () => await _mediaManager.TogglePlayPauseAsync();
+            _hotkeyManager.OnVolumeUpPressed += async () =>
+            {
+                if (await _mediaManager.VolumeUpAsync())
+                {
+                    UpdateVolumeSliderIndicator(5);
+                }
+            };
+            _hotkeyManager.OnVolumeDownPressed += async () =>
+            {
+                if (await _mediaManager.VolumeDownAsync())
+                {
+                    UpdateVolumeSliderIndicator(-5);
+                }
+            };
 
             // 監聽媒體更新
             _mediaManager.MediaInfoUpdated += MediaManager_MediaInfoUpdated;
@@ -95,6 +129,13 @@ namespace MediaController
                 }
 
                 UpdatePlayPauseButton(e.IsPlaying);
+
+                if (e.Volume.HasValue)
+                {
+                    SyncVolumeSlider(e.Volume.Value * 100);
+                }
+
+                SyncPlaybackProgress(e);
             });
         }
 
@@ -169,6 +210,138 @@ namespace MediaController
             await _mediaManager.NextAsync();
         }
 
+        private async void BtnVolumeUp_Click(object sender, RoutedEventArgs e)
+        {
+            if (await _mediaManager.VolumeUpAsync())
+            {
+                UpdateVolumeSliderIndicator(5);
+            }
+        }
+
+        private async void BtnVolumeDown_Click(object sender, RoutedEventArgs e)
+        {
+            if (await _mediaManager.VolumeDownAsync())
+            {
+                UpdateVolumeSliderIndicator(-5);
+            }
+        }
+
+        private void VolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (!IsLoaded || _isUpdatingVolumeSlider)
+            {
+                return;
+            }
+
+            // 等使用者暫停拖曳後才送出，避免每個滑鼠像素都產生藍芽指令。
+            _volumeSliderTimer.Stop();
+            _volumeSliderTimer.Start();
+        }
+
+        private async void VolumeSliderTimer_Tick(object? sender, EventArgs e)
+        {
+            _volumeSliderTimer.Stop();
+
+            double targetValue = VolumeSlider.Value;
+            int steps = (int)Math.Round(
+                (targetValue - _lastSentVolumeSliderValue) / 5,
+                MidpointRounding.AwayFromZero);
+
+            if (steps == 0)
+            {
+                return;
+            }
+
+            double previousValue = _lastSentVolumeSliderValue;
+            _lastSentVolumeSliderValue = targetValue;
+            if (!await _mediaManager.AdjustPhoneVolumeAsync(steps))
+            {
+                _lastSentVolumeSliderValue = previousValue;
+                SetVolumeSliderValue(previousValue);
+            }
+        }
+
+        private void UpdateVolumeSliderIndicator(double change)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                double newValue = Math.Clamp(VolumeSlider.Value + change, VolumeSlider.Minimum, VolumeSlider.Maximum);
+                SetVolumeSliderValue(newValue);
+                _lastSentVolumeSliderValue = newValue;
+            });
+        }
+
+        private void SetVolumeSliderValue(double value)
+        {
+            _isUpdatingVolumeSlider = true;
+            VolumeSlider.Value = value;
+            _isUpdatingVolumeSlider = false;
+        }
+
+        private void SyncVolumeSlider(double value)
+        {
+            double clampedValue = Math.Clamp(value, VolumeSlider.Minimum, VolumeSlider.Maximum);
+            SetVolumeSliderValue(clampedValue);
+            _lastSentVolumeSliderValue = clampedValue;
+            VolumeSlider.IsEnabled = true;
+        }
+
+        private void SyncPlaybackProgress(MediaInfoEventArgs mediaInfo)
+        {
+            if (!string.Equals(_progressTrackTitle, mediaInfo.Title, StringComparison.Ordinal))
+            {
+                _progressTrackTitle = mediaInfo.Title;
+                _playbackElapsedSeconds = 0;
+                _playbackDurationSeconds = 0;
+                _lastPlaybackSyncTime = DateTime.UtcNow;
+            }
+
+            if (mediaInfo.Duration.HasValue)
+            {
+                _playbackDurationSeconds = mediaInfo.Duration.Value;
+            }
+            if (mediaInfo.ElapsedTime.HasValue)
+            {
+                _playbackElapsedSeconds = mediaInfo.ElapsedTime.Value;
+                _lastPlaybackSyncTime = DateTime.UtcNow;
+            }
+
+            _playbackRate = mediaInfo.IsPlaying ? mediaInfo.PlaybackRate : 0;
+            UpdatePlaybackProgress();
+        }
+
+        private void PlaybackProgressTimer_Tick(object? sender, EventArgs e)
+        {
+            UpdatePlaybackProgress();
+        }
+
+        private void UpdatePlaybackProgress()
+        {
+            double elapsed = _playbackElapsedSeconds;
+            if (_playbackRate > 0)
+            {
+                elapsed += (DateTime.UtcNow - _lastPlaybackSyncTime).TotalSeconds * _playbackRate;
+            }
+
+            elapsed = Math.Clamp(elapsed, 0, Math.Max(0, _playbackDurationSeconds));
+            PlaybackProgress.Maximum = Math.Max(1, _playbackDurationSeconds);
+            PlaybackProgress.Value = elapsed;
+            string durationText = _playbackDurationSeconds > 0
+                ? FormatPlaybackTime(_playbackDurationSeconds)
+                : "--:--";
+            TxtPlaybackTime.Text = $"{FormatPlaybackTime(elapsed)} / {durationText}";
+        }
+
+        private static string FormatPlaybackTime(double totalSeconds)
+        {
+            if (totalSeconds <= 0) return "0:00";
+
+            TimeSpan time = TimeSpan.FromSeconds(totalSeconds);
+            return time.TotalHours >= 1
+                ? $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}"
+                : $"{(int)time.TotalMinutes}:{time.Seconds:00}";
+        }
+
         private void BtnPin_Click(object sender, RoutedEventArgs e)
         {
             _isPinned = !_isPinned;
@@ -191,6 +364,8 @@ namespace MediaController
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
             _statusResetTimer?.Stop();
+            _volumeSliderTimer.Stop();
+            _playbackProgressTimer.Stop();
             _hotkeyManager.Dispose();
         }
     }
