@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="BT Media Controller"
-        Height="95" Width="360"
+        Height="125" Width="420"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -115,6 +115,16 @@
                     <Button x:Name="BtnPlayPause" Content="▶" Style="{StaticResource MediaBtnStyle}" Click="BtnPlayPause_Click" ToolTip="播放/暫停 (Ctrl+Alt+Space)" Margin="4,0"/>
                     <Button x:Name="BtnNext" Content="⏭" Style="{StaticResource MediaBtnStyle}" Click="BtnNext_Click" ToolTip="下一首 (Ctrl+Alt+Right)"/>
                 </StackPanel>
+
+                <!-- AMS 不會回傳目前音量，因此滑桿顯示本次程式執行期間的相對調整位置。 -->
+                <DockPanel Margin="0,3,0,0" LastChildFill="False" HorizontalAlignment="Right">
+                    <Button x:Name="BtnVolumeDown" DockPanel.Dock="Left" Content="🔉" Style="{StaticResource IconBtnStyle}" Click="BtnVolumeDown_Click" ToolTip="降低手機音量 (Ctrl+Alt+Down)"/>
+                    <Slider x:Name="VolumeSlider" DockPanel.Dock="Left" Width="105" Minimum="0" Maximum="100" Value="50"
+                            TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="10"
+                            ValueChanged="VolumeSlider_ValueChanged"
+                            ToolTip="拖曳調整手機音量（相對位置；AMS 不提供目前音量讀值）"/>
+                    <Button x:Name="BtnVolumeUp" DockPanel.Dock="Left" Content="🔊" Style="{StaticResource IconBtnStyle}" Click="BtnVolumeUp_Click" ToolTip="提高手機音量 (Ctrl+Alt+Up)"/>
+                </DockPanel>
             </StackPanel>
         </Grid>
     </Border>
