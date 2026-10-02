@@ -117,6 +117,11 @@ namespace MediaController
                 }
 
                 UpdatePlayPauseButton(e.IsPlaying);
+
+                if (e.Volume.HasValue)
+                {
+                    SyncVolumeSlider(e.Volume.Value * 100);
+                }
             });
         }
 
@@ -257,6 +262,14 @@ namespace MediaController
             _isUpdatingVolumeSlider = true;
             VolumeSlider.Value = value;
             _isUpdatingVolumeSlider = false;
+        }
+
+        private void SyncVolumeSlider(double value)
+        {
+            double clampedValue = Math.Clamp(value, VolumeSlider.Minimum, VolumeSlider.Maximum);
+            SetVolumeSliderValue(clampedValue);
+            _lastSentVolumeSliderValue = clampedValue;
+            VolumeSlider.IsEnabled = true;
         }
 
         private void BtnPin_Click(object sender, RoutedEventArgs e)

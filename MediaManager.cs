@@ -15,6 +15,7 @@ namespace MediaController
         public string Album { get; set; } = "";
         public BitmapImage? Thumbnail { get; set; }
         public bool IsPlaying { get; set; }
+        public double? Volume { get; set; }
         public string SourceApp { get; set; } = "";
     }
 
@@ -54,6 +55,7 @@ namespace MediaController
                     Album = e.Album,
                     Thumbnail = artwork,
                     IsPlaying = e.IsPlaying,
+                    Volume = e.Volume,
                     SourceApp = _btManager.ConnectedDeviceName
                 });
                 PlaybackStateUpdated?.Invoke(this, e.IsPlaying);

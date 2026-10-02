@@ -116,13 +116,13 @@
                     <Button x:Name="BtnNext" Content="⏭" Style="{StaticResource MediaBtnStyle}" Click="BtnNext_Click" ToolTip="下一首 (Ctrl+Alt+Right)"/>
                 </StackPanel>
 
-                <!-- AMS 不會回傳目前音量，因此滑桿顯示本次程式執行期間的相對調整位置。 -->
+                <!-- AMS Player Volume 屬性會同步手機目前音量。 -->
                 <DockPanel Margin="0,3,0,0" LastChildFill="False" HorizontalAlignment="Right">
                     <Button x:Name="BtnVolumeDown" DockPanel.Dock="Left" Content="🔉" Style="{StaticResource IconBtnStyle}" Click="BtnVolumeDown_Click" ToolTip="降低手機音量 (Ctrl+Alt+Down)"/>
-                    <Slider x:Name="VolumeSlider" DockPanel.Dock="Left" Width="105" Minimum="0" Maximum="100" Value="50"
+                    <Slider x:Name="VolumeSlider" DockPanel.Dock="Left" Width="105" Minimum="0" Maximum="100" Value="50" IsEnabled="False"
                             TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="10"
                             ValueChanged="VolumeSlider_ValueChanged"
-                            ToolTip="拖曳調整手機音量（相對位置；AMS 不提供目前音量讀值）"/>
+                            ToolTip="拖曳調整手機音量；連線後會同步目前音量"/>
                     <Button x:Name="BtnVolumeUp" DockPanel.Dock="Left" Content="🔊" Style="{StaticResource IconBtnStyle}" Click="BtnVolumeUp_Click" ToolTip="提高手機音量 (Ctrl+Alt+Up)"/>
                 </DockPanel>
             </StackPanel>

@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
@@ -16,6 +17,7 @@ namespace MediaController
         public string Artist { get; set; } = "";
         public string Album { get; set; } = "";
         public bool IsPlaying { get; set; }
+        public double? Volume { get; set; }
     }
 
     public class BluetoothDeviceManager
@@ -34,6 +36,7 @@ namespace MediaController
         private string _artist = "";
         private string _album = "";
         private bool _isPlaying = false;
+        private double? _volume;
         private bool _isConnecting = false;
 
         public event EventHandler<BleMediaInfoEventArgs>? OnMediaUpdated;
@@ -57,7 +60,7 @@ namespace MediaController
                     {
                         byte[] trackSub = new byte[] { 2, 0, 1, 2 };
                         await _entityUpdateChar.WriteValueAsync(trackSub.AsBuffer(), GattWriteOption.WriteWithResponse);
-                        byte[] playerSub = new byte[] { 0, 1 };
+                        byte[] playerSub = new byte[] { 0, 1, 2 };
                         await _entityUpdateChar.WriteValueAsync(playerSub.AsBuffer(), GattWriteOption.WriteWithResponse);
                     }
                     catch (Exception ex)
@@ -224,11 +227,11 @@ namespace MediaController
                     euChar.ValueChanged -= EntityUpdateChar_ValueChanged;
                     euChar.ValueChanged += EntityUpdateChar_ValueChanged;
 
-                    // 3. 發送屬性訂閱 (0: Artist, 1: Album, 2: Title) & Player 狀態
+                    // 3. 訂閱 Track 屬性及 Player 的播放狀態與音量
                     byte[] trackSub = new byte[] { 2, 0, 1, 2 };
                     await euChar.WriteValueAsync(trackSub.AsBuffer(), GattWriteOption.WriteWithResponse);
 
-                    byte[] playerSub = new byte[] { 0, 1 };
+                    byte[] playerSub = new byte[] { 0, 1, 2 };
                     await euChar.WriteValueAsync(playerSub.AsBuffer(), GattWriteOption.WriteWithResponse);
 
                     // 4. 全部握手成功後，才正式賦值類別變數！
@@ -287,6 +290,15 @@ namespace MediaController
                         }
                     }
                 }
+                else if (entityId == 0 && attrId == 2) // Volume (0.0～1.0)
+                {
+                    if (double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double volume))
+                    {
+                        _volume = Math.Clamp(volume, 0, 1);
+                        Logger.Log($"[AMS Volume] 手機音量更新為: {_volume:P0}");
+                        TriggerMediaUpdated();
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -301,7 +313,8 @@ namespace MediaController
                 Title = string.IsNullOrWhiteSpace(_title) ? "未知曲目" : _title,
                 Artist = string.IsNullOrWhiteSpace(_artist) ? "未知歌手" : _artist,
                 Album = _album,
-                IsPlaying = _isPlaying
+                IsPlaying = _isPlaying,
+                Volume = _volume
             });
         }
 
