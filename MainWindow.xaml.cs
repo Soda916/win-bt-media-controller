@@ -15,9 +15,15 @@ namespace MediaController
         private string _currentArtistText = "等待 iPhone 播放...";
         private DispatcherTimer? _statusResetTimer;
         private readonly DispatcherTimer _volumeSliderTimer;
+        private readonly DispatcherTimer _playbackProgressTimer;
         private DateTime _lastRefreshTime = DateTime.MinValue;
         private double _lastSentVolumeSliderValue = 50;
         private bool _isUpdatingVolumeSlider;
+        private double _playbackElapsedSeconds;
+        private double _playbackDurationSeconds;
+        private double _playbackRate;
+        private DateTime _lastPlaybackSyncTime = DateTime.UtcNow;
+        private string _progressTrackTitle = "";
 
         public MainWindow()
         {
@@ -27,6 +33,12 @@ namespace MediaController
                 Interval = TimeSpan.FromMilliseconds(180)
             };
             _volumeSliderTimer.Tick += VolumeSliderTimer_Tick;
+            _playbackProgressTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(500)
+            };
+            _playbackProgressTimer.Tick += PlaybackProgressTimer_Tick;
+            _playbackProgressTimer.Start();
             PositionWindowBottomRight();
         }
 
@@ -122,6 +134,8 @@ namespace MediaController
                 {
                     SyncVolumeSlider(e.Volume.Value * 100);
                 }
+
+                SyncPlaybackProgress(e);
             });
         }
 
@@ -272,6 +286,62 @@ namespace MediaController
             VolumeSlider.IsEnabled = true;
         }
 
+        private void SyncPlaybackProgress(MediaInfoEventArgs mediaInfo)
+        {
+            if (!string.Equals(_progressTrackTitle, mediaInfo.Title, StringComparison.Ordinal))
+            {
+                _progressTrackTitle = mediaInfo.Title;
+                _playbackElapsedSeconds = 0;
+                _playbackDurationSeconds = 0;
+                _lastPlaybackSyncTime = DateTime.UtcNow;
+            }
+
+            if (mediaInfo.Duration.HasValue)
+            {
+                _playbackDurationSeconds = mediaInfo.Duration.Value;
+            }
+            if (mediaInfo.ElapsedTime.HasValue)
+            {
+                _playbackElapsedSeconds = mediaInfo.ElapsedTime.Value;
+                _lastPlaybackSyncTime = DateTime.UtcNow;
+            }
+
+            _playbackRate = mediaInfo.IsPlaying ? mediaInfo.PlaybackRate : 0;
+            UpdatePlaybackProgress();
+        }
+
+        private void PlaybackProgressTimer_Tick(object? sender, EventArgs e)
+        {
+            UpdatePlaybackProgress();
+        }
+
+        private void UpdatePlaybackProgress()
+        {
+            double elapsed = _playbackElapsedSeconds;
+            if (_playbackRate > 0)
+            {
+                elapsed += (DateTime.UtcNow - _lastPlaybackSyncTime).TotalSeconds * _playbackRate;
+            }
+
+            elapsed = Math.Clamp(elapsed, 0, Math.Max(0, _playbackDurationSeconds));
+            PlaybackProgress.Maximum = Math.Max(1, _playbackDurationSeconds);
+            PlaybackProgress.Value = elapsed;
+            string durationText = _playbackDurationSeconds > 0
+                ? FormatPlaybackTime(_playbackDurationSeconds)
+                : "--:--";
+            TxtPlaybackTime.Text = $"{FormatPlaybackTime(elapsed)} / {durationText}";
+        }
+
+        private static string FormatPlaybackTime(double totalSeconds)
+        {
+            if (totalSeconds <= 0) return "0:00";
+
+            TimeSpan time = TimeSpan.FromSeconds(totalSeconds);
+            return time.TotalHours >= 1
+                ? $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}"
+                : $"{(int)time.TotalMinutes}:{time.Seconds:00}";
+        }
+
         private void BtnPin_Click(object sender, RoutedEventArgs e)
         {
             _isPinned = !_isPinned;
@@ -295,6 +365,7 @@ namespace MediaController
         {
             _statusResetTimer?.Stop();
             _volumeSliderTimer.Stop();
+            _playbackProgressTimer.Stop();
             _hotkeyManager.Dispose();
         }
     }

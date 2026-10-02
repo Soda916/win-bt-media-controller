@@ -18,6 +18,9 @@ namespace MediaController
         public string Album { get; set; } = "";
         public bool IsPlaying { get; set; }
         public double? Volume { get; set; }
+        public double? Duration { get; set; }
+        public double? ElapsedTime { get; set; }
+        public double PlaybackRate { get; set; }
     }
 
     public class BluetoothDeviceManager
@@ -37,6 +40,9 @@ namespace MediaController
         private string _album = "";
         private bool _isPlaying = false;
         private double? _volume;
+        private double? _duration;
+        private double? _elapsedTime;
+        private double _playbackRate;
         private bool _isConnecting = false;
 
         public event EventHandler<BleMediaInfoEventArgs>? OnMediaUpdated;
@@ -58,7 +64,7 @@ namespace MediaController
                     Logger.Log("[DeviceManager] AMS 已經完整就緒，重新發送曲目屬性訂閱...");
                     try
                     {
-                        byte[] trackSub = new byte[] { 2, 0, 1, 2 };
+                        byte[] trackSub = new byte[] { 2, 0, 1, 2, 3 };
                         await _entityUpdateChar.WriteValueAsync(trackSub.AsBuffer(), GattWriteOption.WriteWithResponse);
                         byte[] playerSub = new byte[] { 0, 1, 2 };
                         await _entityUpdateChar.WriteValueAsync(playerSub.AsBuffer(), GattWriteOption.WriteWithResponse);
@@ -228,7 +234,7 @@ namespace MediaController
                     euChar.ValueChanged += EntityUpdateChar_ValueChanged;
 
                     // 3. 訂閱 Track 屬性及 Player 的播放狀態與音量
-                    byte[] trackSub = new byte[] { 2, 0, 1, 2 };
+                    byte[] trackSub = new byte[] { 2, 0, 1, 2, 3 };
                     await euChar.WriteValueAsync(trackSub.AsBuffer(), GattWriteOption.WriteWithResponse);
 
                     byte[] playerSub = new byte[] { 0, 1, 2 };
@@ -273,7 +279,20 @@ namespace MediaController
                     {
                         case 0: _artist = val; break;
                         case 1: _album = val; break;
-                        case 2: _title = val; break;
+                        case 2:
+                            if (!string.Equals(_title, val, StringComparison.Ordinal))
+                            {
+                                _duration = null;
+                                _elapsedTime = null;
+                            }
+                            _title = val;
+                            break;
+                        case 3:
+                            if (double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double duration))
+                            {
+                                _duration = Math.Max(0, duration);
+                            }
+                            break;
                     }
                     TriggerMediaUpdated();
                 }
@@ -285,6 +304,14 @@ namespace MediaController
                         if (parts.Length > 0 && int.TryParse(parts[0], out int st))
                         {
                             _isPlaying = (st == 1);
+                            if (parts.Length > 1 && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double rate))
+                            {
+                                _playbackRate = rate;
+                            }
+                            if (parts.Length > 2 && double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out double elapsedTime))
+                            {
+                                _elapsedTime = Math.Max(0, elapsedTime);
+                            }
                             Logger.Log($"[AMS PlaybackState] 播放狀態更新為: {(_isPlaying ? "Playing" : "Paused")}");
                             TriggerMediaUpdated();
                         }
@@ -314,7 +341,10 @@ namespace MediaController
                 Artist = string.IsNullOrWhiteSpace(_artist) ? "未知歌手" : _artist,
                 Album = _album,
                 IsPlaying = _isPlaying,
-                Volume = _volume
+                Volume = _volume,
+                Duration = _duration,
+                ElapsedTime = _elapsedTime,
+                PlaybackRate = _playbackRate
             });
         }
 

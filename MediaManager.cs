@@ -16,6 +16,9 @@ namespace MediaController
         public BitmapImage? Thumbnail { get; set; }
         public bool IsPlaying { get; set; }
         public double? Volume { get; set; }
+        public double? Duration { get; set; }
+        public double? ElapsedTime { get; set; }
+        public double PlaybackRate { get; set; }
         public string SourceApp { get; set; } = "";
     }
 
@@ -56,6 +59,9 @@ namespace MediaController
                     Thumbnail = artwork,
                     IsPlaying = e.IsPlaying,
                     Volume = e.Volume,
+                    Duration = e.Duration,
+                    ElapsedTime = e.ElapsedTime,
+                    PlaybackRate = e.PlaybackRate,
                     SourceApp = _btManager.ConnectedDeviceName
                 });
                 PlaybackStateUpdated?.Invoke(this, e.IsPlaying);
