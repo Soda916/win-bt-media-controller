@@ -38,6 +38,8 @@ namespace MediaController
             _hotkeyManager.OnPreviousPressed += async () => await _mediaManager.PreviousAsync();
             _hotkeyManager.OnNextPressed += async () => await _mediaManager.NextAsync();
             _hotkeyManager.OnPlayPausePressed += async () => await _mediaManager.TogglePlayPauseAsync();
+            _hotkeyManager.OnVolumeUpPressed += async () => await _mediaManager.VolumeUpAsync();
+            _hotkeyManager.OnVolumeDownPressed += async () => await _mediaManager.VolumeDownAsync();
 
             // 監聽媒體更新
             _mediaManager.MediaInfoUpdated += MediaManager_MediaInfoUpdated;
@@ -167,6 +169,16 @@ namespace MediaController
         private async void BtnNext_Click(object sender, RoutedEventArgs e)
         {
             await _mediaManager.NextAsync();
+        }
+
+        private async void BtnVolumeUp_Click(object sender, RoutedEventArgs e)
+        {
+            await _mediaManager.VolumeUpAsync();
+        }
+
+        private async void BtnVolumeDown_Click(object sender, RoutedEventArgs e)
+        {
+            await _mediaManager.VolumeDownAsync();
         }
 
         private void BtnPin_Click(object sender, RoutedEventArgs e)

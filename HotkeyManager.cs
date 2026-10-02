@@ -13,12 +13,16 @@ namespace MediaController
         private const uint MOD_NOREPEAT = 0x4000;
 
         private const uint VK_LEFT = 0x25;
+        private const uint VK_UP = 0x26;
         private const uint VK_RIGHT = 0x27;
+        private const uint VK_DOWN = 0x28;
         private const uint VK_SPACE = 0x20;
 
         private const int HOTKEY_ID_PREV = 9001;
         private const int HOTKEY_ID_NEXT = 9002;
         private const int HOTKEY_ID_PLAYPAUSE = 9003;
+        private const int HOTKEY_ID_VOLUME_UP = 9004;
+        private const int HOTKEY_ID_VOLUME_DOWN = 9005;
 
         [DllImport("user32.dll")]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -32,6 +36,8 @@ namespace MediaController
         public event Action? OnPreviousPressed;
         public event Action? OnNextPressed;
         public event Action? OnPlayPausePressed;
+        public event Action? OnVolumeUpPressed;
+        public event Action? OnVolumeDownPressed;
 
         public void Initialize(Window window)
         {
@@ -45,6 +51,8 @@ namespace MediaController
             RegisterHotKey(_hWnd, HOTKEY_ID_PREV, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_LEFT);
             RegisterHotKey(_hWnd, HOTKEY_ID_NEXT, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_RIGHT);
             RegisterHotKey(_hWnd, HOTKEY_ID_PLAYPAUSE, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_SPACE);
+            RegisterHotKey(_hWnd, HOTKEY_ID_VOLUME_UP, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_UP);
+            RegisterHotKey(_hWnd, HOTKEY_ID_VOLUME_DOWN, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_DOWN);
         }
 
         private IntPtr HwndHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -66,6 +74,14 @@ namespace MediaController
                         OnPlayPausePressed?.Invoke();
                         handled = true;
                         break;
+                    case HOTKEY_ID_VOLUME_UP:
+                        OnVolumeUpPressed?.Invoke();
+                        handled = true;
+                        break;
+                    case HOTKEY_ID_VOLUME_DOWN:
+                        OnVolumeDownPressed?.Invoke();
+                        handled = true;
+                        break;
                 }
             }
             return IntPtr.Zero;
@@ -84,6 +100,8 @@ namespace MediaController
                 UnregisterHotKey(_hWnd, HOTKEY_ID_PREV);
                 UnregisterHotKey(_hWnd, HOTKEY_ID_NEXT);
                 UnregisterHotKey(_hWnd, HOTKEY_ID_PLAYPAUSE);
+                UnregisterHotKey(_hWnd, HOTKEY_ID_VOLUME_UP);
+                UnregisterHotKey(_hWnd, HOTKEY_ID_VOLUME_DOWN);
                 _hWnd = IntPtr.Zero;
             }
         }
