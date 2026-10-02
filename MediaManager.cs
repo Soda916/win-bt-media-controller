@@ -251,32 +251,43 @@ namespace MediaController
             SendMediaKey(VK_MEDIA_PLAY_PAUSE);
         }
 
-        public async Task VolumeUpAsync()
-        {
-            Logger.Log("[Action] 發送手機音量增加指令");
+        public Task<bool> VolumeUpAsync() => AdjustPhoneVolumeAsync(1);
 
-            if (_btManager.IsAmsConnected && await _btManager.VolumeUpAsync())
+        public Task<bool> VolumeDownAsync() => AdjustPhoneVolumeAsync(-1);
+
+        public async Task<bool> AdjustPhoneVolumeAsync(int steps)
+        {
+            if (steps == 0) return true;
+
+            // 一次最多送 20 格，避免異常 UI 輸入造成大量 BLE 寫入。
+            steps = Math.Clamp(steps, -20, 20);
+            bool increase = steps > 0;
+            int commandCount = Math.Abs(steps);
+            Logger.Log($"[Action] 發送手機音量{(increase ? "增加" : "降低")}指令，共 {commandCount} 格");
+
+            if (!_btManager.IsAmsConnected)
             {
-                StatusUpdated?.Invoke(this, "🔊 手機音量增加");
-                return;
+                Logger.Log("[Action] 手機音量調整失敗：AMS 尚未連線");
+                StatusUpdated?.Invoke(this, "請先連線支援 AMS 的 iPhone");
+                return false;
             }
 
-            Logger.Log("[Action] 手機音量增加失敗：AMS 尚未連線或裝置不支援");
-            StatusUpdated?.Invoke(this, "請先連線支援 AMS 的 iPhone");
-        }
-
-        public async Task VolumeDownAsync()
-        {
-            Logger.Log("[Action] 發送手機音量降低指令");
-
-            if (_btManager.IsAmsConnected && await _btManager.VolumeDownAsync())
+            for (int i = 0; i < commandCount; i++)
             {
-                StatusUpdated?.Invoke(this, "🔉 手機音量降低");
-                return;
+                bool sent = increase
+                    ? await _btManager.VolumeUpAsync()
+                    : await _btManager.VolumeDownAsync();
+
+                if (!sent)
+                {
+                    Logger.Log($"[Action] 手機音量調整在第 {i + 1} 格失敗");
+                    StatusUpdated?.Invoke(this, "手機音量調整失敗，請重新連線");
+                    return false;
+                }
             }
 
-            Logger.Log("[Action] 手機音量降低失敗：AMS 尚未連線或裝置不支援");
-            StatusUpdated?.Invoke(this, "請先連線支援 AMS 的 iPhone");
+            StatusUpdated?.Invoke(this, increase ? "🔊 手機音量增加" : "🔉 手機音量降低");
+            return true;
         }
 
         private static void SendMediaKey(byte key)
