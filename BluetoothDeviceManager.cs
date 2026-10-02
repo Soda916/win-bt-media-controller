@@ -280,9 +280,10 @@ namespace MediaController
                         case 0: _artist = val; break;
                         case 1: _album = val; break;
                         case 2:
+                            // iOS 不保證 Track 屬性的通知順序；Duration (Attr 3)
+                            // 經常會早於 Title (Attr 2) 抵達，不能在這裡清掉它。
                             if (!string.Equals(_title, val, StringComparison.Ordinal))
                             {
-                                _duration = null;
                                 _elapsedTime = null;
                             }
                             _title = val;

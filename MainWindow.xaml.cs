@@ -296,6 +296,8 @@ namespace MediaController
                 _lastPlaybackSyncTime = DateTime.UtcNow;
             }
 
+            // AMS 常以 Artist → Duration → Title → Album 的順序送出新曲目資料。
+            // Title 抵達時，事件內攜帶的 Duration 已是新曲目的值，必須在重設後套回。
             if (mediaInfo.Duration.HasValue)
             {
                 _playbackDurationSeconds = mediaInfo.Duration.Value;
