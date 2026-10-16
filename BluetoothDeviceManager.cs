@@ -1,5 +1,8 @@
 using System;
 using System.Globalization;
+using System.Diagnostics;
+using System.Threading;
+using Windows.Foundation;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
@@ -43,7 +46,11 @@ namespace MediaController
         private double? _duration;
         private double? _elapsedTime;
         private double _playbackRate;
-        private bool _isConnecting = false;
+        private readonly SemaphoreSlim _scanGate = new(1, 1);
+        private readonly SemaphoreSlim _setupGate = new(1, 1);
+        private readonly object _stateLock = new();
+        private CancellationTokenSource _connectionLifetime = new();
+        private GattDeviceService? _amsService;
 
         public event EventHandler<BleMediaInfoEventArgs>? OnMediaUpdated;
         public event EventHandler<string>? OnStatusMessage;
@@ -53,211 +60,208 @@ namespace MediaController
 
         public async Task ScanAndConnectPairedDevicesAsync()
         {
-            if (_isConnecting) return;
-            _isConnecting = true;
-
+            if (!await _scanGate.WaitAsync(0)) return;
             try
             {
-                // 若已完整連線，只發送刷新屬性，不重複握手以防 AccessDenied
-                if (IsAmsConnected && _entityUpdateChar != null)
-                {
-                    Logger.Log("[DeviceManager] AMS 已經完整就緒，重新發送曲目屬性訂閱...");
-                    try
-                    {
-                        byte[] trackSub = new byte[] { 2, 0, 1, 2, 3 };
-                        await _entityUpdateChar.WriteValueAsync(trackSub.AsBuffer(), GattWriteOption.WriteWithResponse);
-                        byte[] playerSub = new byte[] { 0, 1, 2 };
-                        await _entityUpdateChar.WriteValueAsync(playerSub.AsBuffer(), GattWriteOption.WriteWithResponse);
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Log($"[DeviceManager] 刷新訂閱異常: {ex.Message}，重設連線狀態");
-                        _remoteCommandChar = null;
-                        _entityUpdateChar = null;
-                    }
-                    return;
-                }
-
+                if (IsAmsConnected) return;
                 Logger.Log("[DeviceManager] 開始掃描已配對 BLE 裝置...");
-
-                string bleSelector = BluetoothLEDevice.GetDeviceSelectorFromPairingState(true);
-                var bleDevices = await DeviceInformation.FindAllAsync(bleSelector);
-                Logger.Log($"[BLE] 找到 {bleDevices.Count} 個已配對 BLE 裝置:");
-                foreach (var d in bleDevices)
+                var devices = await DeviceInformation.FindAllAsync(
+                    BluetoothLEDevice.GetDeviceSelectorFromPairingState(true));
+                Logger.Log($"[BLE] 找到 {devices.Count} 個已配對 BLE 裝置");
+                foreach (var device in devices)
                 {
-                    Logger.Log($"  - [BLE] 名稱: '{d.Name}', ID: {d.Id}");
-                }
-
-                foreach (var d in bleDevices)
-                {
-                    Logger.Log($"[BLE] 嘗試連線已配對裝置: '{d.Name}'...");
-                    bool ok = await TryConnectAmsAsync(d.Id);
-                    if (ok)
+                    BluetoothLEDevice? bleDev = null;
+                    lock (_stateLock)
                     {
-                        Logger.Log($"[BLE] ✅ 成功與 '{d.Name}' 建立 AMS 完整通道！");
-                        OnStatusMessage?.Invoke(this, $"已連線: {d.Name}");
-                        return;
+                        if (_connectedBleDevice?.DeviceId == device.Id) bleDev = _connectedBleDevice;
                     }
+                    bleDev ??= await BluetoothLEDevice.FromIdAsync(device.Id);
+                    if (bleDev == null) continue;
+                    lock (_stateLock)
+                    {
+                        if (!ReferenceEquals(_connectedBleDevice, bleDev))
+                        {
+                            ResetConnection();
+                            if (_connectedBleDevice != null)
+                            {
+                                _connectedBleDevice.ConnectionStatusChanged -= BleDev_ConnectionStatusChanged;
+                                _connectedBleDevice.Dispose();
+                            }
+                            _connectedBleDevice = bleDev;
+                            bleDev.ConnectionStatusChanged += BleDev_ConnectionStatusChanged;
+                        }
+                    }
+                    if (await SetupAmsGattAsync(bleDev)) return;
                 }
-
-                OnStatusMessage?.Invoke(this, "請在 iPhone 藍芽設定點擊電腦名稱連線...");
+                if (!IsAmsConnected)
+                    OnStatusMessage?.Invoke(this, "請在 iPhone 藍芽設定點擊電腦名稱連線...");
             }
-            catch (Exception ex)
-            {
-                Logger.Log($"[DeviceManager] 掃描異常: {ex}");
-            }
-            finally
-            {
-                _isConnecting = false;
-            }
+            catch (Exception ex) { Logger.Log($"[DeviceManager] 掃描異常: {ex}"); }
+            finally { _scanGate.Release(); }
         }
 
-        private async Task<bool> TryConnectAmsAsync(string deviceId)
+        // Called only while holding _stateLock. Each disconnect invalidates all old work.
+        private void ResetConnection()
         {
-            try
-            {
-                var bleDev = await BluetoothLEDevice.FromIdAsync(deviceId);
-                if (bleDev != null)
-                {
-                    bleDev.ConnectionStatusChanged -= BleDev_ConnectionStatusChanged;
-                    bleDev.ConnectionStatusChanged += BleDev_ConnectionStatusChanged;
-                    return await SetupAmsGattAsync(bleDev);
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Log($"[TryConnectAms] 異常: {ex.Message}");
-            }
-            return false;
+            var previous = _connectionLifetime;
+            _connectionLifetime = new CancellationTokenSource();
+            previous.Cancel();
+            previous.Dispose();
+            if (_entityUpdateChar != null)
+                _entityUpdateChar.ValueChanged -= EntityUpdateChar_ValueChanged;
+            _remoteCommandChar = null;
+            _entityUpdateChar = null;
+            _amsService?.Dispose();
+            _amsService = null;
         }
 
         private async void BleDev_ConnectionStatusChanged(BluetoothLEDevice sender, object args)
         {
-            Logger.Log($"[ConnectionStatusChanged] '{sender.Name}' 連線狀態: {sender.ConnectionStatus}");
-            if (sender.ConnectionStatus == BluetoothConnectionStatus.Connected && !IsAmsConnected)
+            try
             {
-                Logger.Log("[ConnectionStatusChanged] 手機連上！啟動 AMS 握手...");
-                await Task.Delay(300); // 緩衝 300ms 等待藍芽實體層穩定
-                await SetupAmsGattAsync(sender);
+                CancellationToken token;
+                lock (_stateLock)
+                {
+                    if (!ReferenceEquals(sender, _connectedBleDevice)) return;
+                    Logger.Log($"[ConnectionStatusChanged] '{sender.Name}' 連線狀態: {sender.ConnectionStatus}");
+                    if (sender.ConnectionStatus == BluetoothConnectionStatus.Disconnected)
+                    {
+                        ResetConnection();
+                        OnStatusMessage?.Invoke(this, "iPhone 已中斷連線，等候重連...");
+                        return;
+                    }
+                    token = _connectionLifetime.Token;
+                }
+                await Task.Delay(300, token);
+                await SetupAmsGattAsync(sender, token);
             }
-            else if (sender.ConnectionStatus == BluetoothConnectionStatus.Disconnected)
+            catch (OperationCanceledException) { Logger.Log("[GATT] 連線已變更，取消舊握手"); }
+            catch (Exception ex) { Logger.Log($"[ConnectionStatusChanged] 異常: {ex}"); }
+        }
+
+        private async Task<T> GattStepAsync<T>(string name,
+            Func<IAsyncOperation<T>> operation, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(15));
+            var elapsed = Stopwatch.StartNew();
+            Logger.Log($"[GATT] {name} 開始");
+            try
             {
-                _remoteCommandChar = null;
-                _entityUpdateChar = null;
-                OnStatusMessage?.Invoke(this, "iPhone 已中斷連線，等候重連...");
+                var result = await operation().AsTask(timeout.Token);
+                Logger.Log($"[GATT] {name} 完成 ({elapsed.ElapsedMilliseconds}ms): {result}");
+                return result;
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                throw new TimeoutException($"{name} 超過 15 秒 ({elapsed.ElapsedMilliseconds}ms)");
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"[GATT] {name} 中止 ({elapsed.ElapsedMilliseconds}ms): {ex.Message}");
+                throw;
             }
         }
 
-        private async Task<bool> SetupAmsGattAsync(BluetoothLEDevice bleDev)
+        private static void RequireSuccess(GattCommunicationStatus status, string step)
         {
-            // 帶重試機制 (最多 3 次)，解決藍芽連線切換瞬間的 OperationCanceledException
-            for (int attempt = 1; attempt <= 3; attempt++)
+            if (status != GattCommunicationStatus.Success)
+                throw new InvalidOperationException($"{step}: {status}");
+        }
+
+        private async Task<bool> SetupAmsGattAsync(BluetoothLEDevice bleDev,
+            CancellationToken? expectedToken = null)
+        {
+            CancellationToken token;
+            lock (_stateLock)
             {
-                try
-                {
-                    _connectedBleDevice = bleDev;
-                    Logger.Log($"[GATT] 讀取 '{bleDev.Name}' 服務 (嘗試 {attempt}/3)...");
-
-                    var servicesResult = await bleDev.GetGattServicesAsync(BluetoothCacheMode.Cached);
-                    if (servicesResult.Status != GattCommunicationStatus.Success || servicesResult.Services.Count == 0)
-                    {
-                        servicesResult = await bleDev.GetGattServicesAsync(BluetoothCacheMode.Uncached);
-                    }
-
-                    if (servicesResult.Status != GattCommunicationStatus.Success)
-                    {
-                        Logger.Log($"[GATT] 查詢服務失敗: {servicesResult.Status}");
-                        await Task.Delay(500);
-                        continue;
-                    }
-
-                    // 動態匹配 AMS 服務 UUID
-                    var amsService = servicesResult.Services.FirstOrDefault(s =>
-                        s.Uuid == AmsServiceUuid ||
-                        s.Uuid.ToString().ToLower().StartsWith("89d3502b"));
-
-                    if (amsService == null)
-                    {
-                        Logger.Log($"[GATT] '{bleDev.Name}' 未見 AMS 服務 UUID");
-                        return false;
-                    }
-
-                    Logger.Log($"[GATT] 🔥 鎖定 AMS 服務 ({amsService.Uuid})，獲取特徵碼...");
-                    var charsResult = await amsService.GetCharacteristicsAsync(BluetoothCacheMode.Cached);
-                    if (charsResult.Status != GattCommunicationStatus.Success || charsResult.Characteristics.Count == 0)
-                    {
-                        charsResult = await amsService.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
-                    }
-
-                    if (charsResult.Status != GattCommunicationStatus.Success)
-                    {
-                        Logger.Log($"[GATT] 獲取特徵碼失敗: {charsResult.Status}");
-                        await Task.Delay(500);
-                        continue;
-                    }
-
-                    GattCharacteristic? rcChar = null;
-                    GattCharacteristic? euChar = null;
-
-                    foreach (var ch in charsResult.Characteristics)
-                    {
-                        string uuidLower = ch.Uuid.ToString().ToLower();
-                        if (ch.Uuid == RemoteCommandCharUuid || uuidLower.StartsWith("9b3c81d8"))
-                        {
-                            rcChar = ch;
-                        }
-                        else if (ch.Uuid == EntityUpdateCharUuid || uuidLower.StartsWith("2f7cabce") || uuidLower.Contains("2f7c"))
-                        {
-                            euChar = ch;
-                        }
-                    }
-
-                    if (rcChar == null || euChar == null)
-                    {
-                        Logger.Log("[GATT] 未找齊 RemoteCommand 或 EntityUpdate 特徵碼");
-                        await Task.Delay(500);
-                        continue;
-                    }
-
-                    // 1. 【關鍵修復】訂閱 RemoteCommand 通知！
-                    // Apple AMS 規範明訂：Media Controller 必須先訂閱 RemoteCommand 通知，iOS 才會開放接受控制指令！
-                    var rcNotify = await rcChar.WriteClientCharacteristicConfigurationDescriptorAsync(
-                        GattClientCharacteristicConfigurationDescriptorValue.Notify);
-                    Logger.Log($"[GATT] ✅ RemoteCommand 啟用控制通道通知: {rcNotify}");
-
-                    // 2. 訂閱 EntityUpdate 通知 (接收曲目與進度)
-                    var euNotify = await euChar.WriteClientCharacteristicConfigurationDescriptorAsync(
-                        GattClientCharacteristicConfigurationDescriptorValue.Notify);
-                    Logger.Log($"[GATT] ✅ EntityUpdate 啟用曲目通知: {euNotify}");
-
-                    euChar.ValueChanged -= EntityUpdateChar_ValueChanged;
-                    euChar.ValueChanged += EntityUpdateChar_ValueChanged;
-
-                    // 3. 訂閱 Track 屬性及 Player 的播放狀態與音量
-                    byte[] trackSub = new byte[] { 2, 0, 1, 2, 3 };
-                    await euChar.WriteValueAsync(trackSub.AsBuffer(), GattWriteOption.WriteWithResponse);
-
-                    byte[] playerSub = new byte[] { 0, 1, 2 };
-                    await euChar.WriteValueAsync(playerSub.AsBuffer(), GattWriteOption.WriteWithResponse);
-
-                    // 4. 全部握手成功後，才正式賦值類別變數！
-                    _remoteCommandChar = rcChar;
-                    _entityUpdateChar = euChar;
-
-                    Logger.Log("[GATT] 🎉 AMS 握手完全成功！控制與曲目同步全部就緒！");
-                    OnStatusMessage?.Invoke(this, $"AMS 已連線: {bleDev.Name}");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    Logger.Log($"[SetupAmsGatt] 嘗試 {attempt}/3 異常: {ex.Message}");
-                    _remoteCommandChar = null;
-                    _entityUpdateChar = null;
-                    await Task.Delay(600);
-                }
+                if (!ReferenceEquals(bleDev, _connectedBleDevice)) return false;
+                token = expectedToken ?? _connectionLifetime.Token;
             }
+            bool entered = false;
+            try
+            {
+                await _setupGate.WaitAsync(token);
+                entered = true;
+                token.ThrowIfCancellationRequested();
+                if (IsAmsConnected) return true;
+                for (int attempt = 1; attempt <= 3; attempt++)
+                {
+                    GattDeviceService? service = null;
+                    GattCharacteristic? update = null;
+                    try
+                    {
+                        Logger.Log($"[GATT] 讀取 '{bleDev.Name}' AMS 服務 (嘗試 {attempt}/3)...");
+                        var services = await GattStepAsync("查詢 AMS 服務", () =>
+                            bleDev.GetGattServicesForUuidAsync(AmsServiceUuid, BluetoothCacheMode.Uncached), token);
+                        Logger.Log($"[GATT] AMS 服務結果: {services.Status}, 數量: {services.Services.Count}");
+                        // Dispose even results returned just before a disconnect.
+                        foreach (var candidate in services.Services)
+                        {
+                            if (service == null && candidate.Uuid == AmsServiceUuid) service = candidate;
+                            else candidate.Dispose();
+                        }
+                        RequireSuccess(services.Status, "查詢 AMS 服務");
+                        if (service == null) throw new InvalidOperationException("裝置未提供 AMS 服務");
+                        var chars = await GattStepAsync("查詢 AMS 特徵碼", () =>
+                            service.GetCharacteristicsAsync(BluetoothCacheMode.Uncached), token);
+                        Logger.Log($"[GATT] AMS 特徵碼結果: {chars.Status}, 數量: {chars.Characteristics.Count}");
+                        RequireSuccess(chars.Status, "查詢 AMS 特徵碼");
+                        var remote = chars.Characteristics.FirstOrDefault(c => c.Uuid == RemoteCommandCharUuid);
+                        update = chars.Characteristics.FirstOrDefault(c => c.Uuid == EntityUpdateCharUuid);
+                        if (remote == null || update == null)
+                            throw new InvalidOperationException("未找齊 AMS 特徵碼");
 
-            return false;
+                        RequireSuccess(await GattStepAsync("RemoteCommand 通知訂閱", () =>
+                            remote.WriteClientCharacteristicConfigurationDescriptorAsync(
+                                GattClientCharacteristicConfigurationDescriptorValue.Notify), token), "RemoteCommand 通知訂閱");
+                        update.ValueChanged += EntityUpdateChar_ValueChanged;
+                        RequireSuccess(await GattStepAsync("EntityUpdate 通知訂閱", () =>
+                            update.WriteClientCharacteristicConfigurationDescriptorAsync(
+                                GattClientCharacteristicConfigurationDescriptorValue.Notify), token), "EntityUpdate 通知訂閱");
+                        RequireSuccess(await GattStepAsync("Track 屬性訂閱", () =>
+                            update.WriteValueAsync(new byte[] { 2, 0, 1, 2, 3 }.AsBuffer(),
+                                GattWriteOption.WriteWithResponse), token), "Track 屬性訂閱");
+                        RequireSuccess(await GattStepAsync("Player 屬性訂閱", () =>
+                            update.WriteValueAsync(new byte[] { 0, 1, 2 }.AsBuffer(),
+                                GattWriteOption.WriteWithResponse), token), "Player 屬性訂閱");
+                        lock (_stateLock)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            if (!ReferenceEquals(bleDev, _connectedBleDevice) ||
+                                bleDev.ConnectionStatus != BluetoothConnectionStatus.Connected)
+                                throw new OperationCanceledException("連線已失效");
+                            _amsService = service;
+                            _remoteCommandChar = remote;
+                            _entityUpdateChar = update;
+                            service = null; // Ownership transfers to the active connection.
+                            update = null;
+                            Logger.Log("[GATT] AMS 握手完全成功！");
+                            OnStatusMessage?.Invoke(this, $"AMS 已連線: {bleDev.Name}");
+                        }
+                        return true;
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"[SetupAmsGatt] 嘗試 {attempt}/3 失敗: {ex}");
+                    }
+                    finally
+                    {
+                        if (update != null) update.ValueChanged -= EntityUpdateChar_ValueChanged;
+                        service?.Dispose();
+                    }
+                    if (attempt < 3) await Task.Delay(600, token);
+                }
+                return false;
+            }
+            catch (OperationCanceledException)
+            {
+                Logger.Log("[GATT] 連線已變更，取消舊握手");
+                return false;
+            }
+            finally { if (entered) _setupGate.Release(); }
         }
 
         private void EntityUpdateChar_ValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
